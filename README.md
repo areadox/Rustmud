@@ -20,6 +20,8 @@ Läuft unter Windows, Linux und macOS.
 - **Zeichensatz** pro Welt: Latin-1 (Standard, passend für die meisten deutschen MUDs) oder UTF-8
 - **Weltenverwaltung im Programm**: Welten anlegen, öffnen, verbinden, bearbeiten, umbenennen, duplizieren,
   löschen, importieren und exportieren; mehrere Welten gleichzeitig als Tabs
+- **Andockbereich**: Einstellungen, Trigger, Aliase, Plugins usw. öffnen sich als Tabs rechts neben der Ausgabe statt als schwebende Fenster
+- **Plugins**: eigenständige Lua-Erweiterungen mit eigenem Zustand, pro Welt aktivierbar, mit **Plugin-Manager**
 - **Icon-Leiste** für alle wichtigen Funktionen plus **eigene Knöpfe** pro Welt (z. B. „⚔ Angriff“ → `toete @ziel`)
 - **Ziffernblock zum Laufen**, pro Welt frei belegbar (Standard: deutsche Richtungen n, no, o, so, s, sw, w, nw, ob, u)
 - **Installer für Windows** und **Update-Funktion**: rustmud prüft beim Start auf neue Versionen und aktualisiert sich auf Wunsch selbst
@@ -81,12 +83,17 @@ cargo test
 | 🌍 | Weltenverwaltung |
 | 🔌 / ⏏ | Verbinden / Trennen |
 | 💾 | Welt speichern |
-| ⚙ ⚡ ⌨ ⏱ 📋 🔢 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock |
+| ⚙ ⚡ ⌨ ⏱ 📋 🔢 📦 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock, Plugins |
 | 🔄 | Lua-Skript neu laden |
 | 📝 | Log starten/beenden |
 | 📡 | GMCP/MSDP-Daten anzeigen |
 | 🗑 | Ausgabe leeren |
 | ➕ | eigene Knöpfe anlegen und bearbeiten |
+
+Die Fenster öffnen sich im **Andockbereich** rechts neben der Ausgabe. Mehrere geöffnete Fenster erscheinen dort
+als Tabs (✖ schließt einen Tab), die Breite lässt sich mit der Maus ziehen. Ein zweiter Klick auf das Symbol schließt
+den Tab wieder; **Ansicht → Alle angedockten Fenster schließen** räumt den Bereich auf. Die Inhalte beziehen sich immer
+auf die gerade gewählte Welt.
 
 Eigene Knöpfe erscheinen rechts daneben. Sie können einen Befehl senden, wie eine Eingabe ausgeführt werden
 (mit Aliassen, `;` und Speedwalk), Lua-Code ausführen oder eine Notiz ausgeben.
@@ -184,6 +191,51 @@ Bei „Senden an: Skript“ stehen die Treffer in den Tabellen `matches` und `wi
 
 Ein Beispielskript liegt unter [`beispiele/beispiel.lua`](beispiele/beispiel.lua).
 
+## Plugins
+
+Plugins erweitern rustmud um eigene Funktionen, ohne das Welt-Skript anzufassen. Jedes Plugin läuft in einem eigenen
+Lua-Zustand, hat eigene Variablen und wird **pro Welt** im **Plugin-Manager** (📦) ein- und ausgeschaltet.
+
+Im Plugin-Manager kann man:
+- installierte Plugins sehen und per Haken in der aktuellen Welt aktivieren
+- Plugins aus einem Ordner oder aus einer einzelnen `.lua`-Datei installieren
+- ein neues Plugin aus einer Vorlage anlegen (öffnet die `main.lua` im Editor)
+- Plugins neu laden, ihren Ordner öffnen oder sie löschen
+
+Plugins liegen im Konfigurationsordner unter `plugins/<kennung>/`:
+
+```
+plugins/
+└── lp-warnung/
+    ├── plugin.toml
+    └── main.lua
+```
+
+```toml
+# plugin.toml
+id = "lp-warnung"
+name = "LP-Warnung"
+version = "1.0.0"
+author = "areadox"
+description = "Warnt, wenn die Lebenspunkte unter eine Grenze fallen."
+main = "main.lua"
+```
+
+Plugins können die komplette [Lua-API](#lua-api) nutzen und folgende Callbacks definieren:
+
+| Callback | Wann |
+|----------|------|
+| `OnPluginInstall()` | beim Laden des Plugins |
+| `OnPluginConnect()`, `OnPluginDisconnect()` | nach dem Verbinden / Trennen |
+| `OnPluginLineReceived(zeile)` | für jede empfangene Zeile – `return false` blendet sie aus |
+| `OnPluginCommand(befehl)` | für jeden Befehl vor dem Senden – `return false` verhindert das Senden |
+| `OnPluginGMCP(paket, json)`, `OnPluginMSDP(variable)` | bei Protokolldaten (zusätzlich in `gmcp`/`msdp`) |
+| `OnPluginDisable()` | beim Ausschalten |
+
+Zusätzliche Funktionen in Plugins: `GetPluginID()`, `GetPluginName()`, `GetPluginDirectory()`.
+Ein vollständiges Beispiel ist [`beispiele/plugins/lp-warnung`](beispiele/plugins/lp-warnung) – es reagiert auf
+GMCP `Char.Vitals` oder Zeilen wie „LP: 25“ und bringt den eigenen Befehl `lpwarnung <zahl>` mit.
+
 ## Aufbau
 
 | Datei | Inhalt |
@@ -195,15 +247,16 @@ Ein Beispielskript liegt unter [`beispiele/beispiel.lua`](beispiele/beispiel.lua
 | `automation.rs` | Mustervergleich, Platzhalter, Speedwalk, Befehlstrenner |
 | `scripting.rs` | Lua-Einbindung (mlua) und API |
 | `world.rs` | Welt-Dateien (TOML) |
+| `plugins.rs` | Plugin-Verwaltung (Manifest, Installation, Vorlage) |
 | `keypad.rs` | Ziffernblock-Erkennung (Windows: Fenster-Subclassing) |
 | `updater.rs` | Update-Prüfung und -Installation über GitHub-Releases |
-| `app.rs`, `ui_editors.rs` | Oberfläche, Icon-Leiste, Weltenverwaltung, Dialoge |
+| `app.rs`, `ui_editors.rs` | Oberfläche, Icon-Leiste, Andockbereich, Weltenverwaltung, Plugin-Manager |
 | `installer/rustmud.nsi` | Windows-Installer (NSIS) |
 
 ## Geplant
 
 - Mini-Windows (eigene Zeichenflächen aus Lua, wie `WindowCreate` bei MUSHclient)
-- MXP, Plugins und Import von MUSHclient-Welten (`.mcl`)
+- MXP, Import von MUSHclient-Welten (`.mcl`) und MUSHclient-Plugins (`.xml`)
 - Suche in der Ausgabe, mehrere Ausgabefenster
 
 Ideen und Fehler gerne als [Issue](https://github.com/areadox/Rustmud/issues) melden.

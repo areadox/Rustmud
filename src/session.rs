@@ -5,6 +5,7 @@ use crate::ansi::{color_from_name, AnsiEvent, AnsiParser, Color, Line, Style};
 use crate::automation::{parse_speedwalk, split_command_stack, substitute, Automation, Match};
 use crate::logger::Logger;
 use crate::net::{Connection, NetEvent};
+use crate::plugins::{PluginInstance, PluginMeta};
 use crate::scripting::{error_style, note_style, Action, ScriptEngine};
 use crate::telnet::{escape_iac, naws_packet, TelnetConfig, TelnetEvent};
 use crate::world::{default_log_dir, worlds_dir, Encoding, SendTo, World};
@@ -40,6 +41,7 @@ pub struct Session {
     pub output_version: u64,
     pub term_size: (u16, u16),
     pub script: ScriptEngine,
+    pub plugins: Vec<PluginInstance>,
     conn: Option<Connection>,
     decoder: Decoder,
     ansi: AnsiParser,
@@ -83,6 +85,7 @@ impl Session {
             output_version: 0,
             term_size: (80, 24),
             script,
+            plugins: Vec::new(),
             conn: None,
             ansi: AnsiParser::new(),
             automation: Automation::default(),
@@ -99,6 +102,7 @@ impl Session {
             s.world.name, s.world.host, s.world.port
         ));
         s.load_script();
+        s.reload_plugins();
         s
     }
 
@@ -180,7 +184,95 @@ impl Session {
         self.load_script();
     }
 
+    // ------------------------------------------------------------ Plugins
+
+    #[cfg(test)]
+    pub fn save_world_vars_for_test(&mut self) {
+        self.store_plugin_vars();
+    }
+
+    fn store_plugin_vars(&mut self) {
+        for p in &self.plugins {
+            let vars = p.engine.shared.borrow().variables.clone();
+            if vars.is_empty() {
+                self.world.plugin_vars.remove(&p.meta.id);
+            } else {
+                self.world.plugin_vars.insert(p.meta.id.clone(), vars);
+            }
+        }
+    }
+
+    /// Lädt alle in dieser Welt aktiven Plugins (neu).
+    pub fn reload_plugins(&mut self) {
+        self.store_plugin_vars();
+        self.plugins.clear();
+        let (installed, _) = crate::plugins::list_plugins();
+        for id in self.world.plugins.clone() {
+            match installed.iter().find(|m| m.id == id) {
+                Some(meta) => self.load_plugin(meta.clone()),
+                None => self.error(&format!("Plugin „{id}“ ist aktiviert, aber nicht installiert.")),
+            }
+        }
+    }
+
+    fn load_plugin(&mut self, meta: PluginMeta) {
+        let vars = self.world.plugin_vars.get(&meta.id).cloned().unwrap_or_default();
+        let name = meta.name.clone();
+        let p = PluginInstance::load(meta, vars, &self.world.name);
+        self.plugins.push(p);
+        self.note(&format!("Plugin geladen: {name}"));
+        self.drain_actions(0);
+        if self.is_connected() {
+            if let Some(p) = self.plugins.last() {
+                p.engine.call_if_exists("OnPluginConnect", ());
+            }
+            self.drain_actions(0);
+        }
+    }
+
+    pub fn plugin_enabled(&self, id: &str) -> bool {
+        self.world.plugins.iter().any(|p| p == id)
+    }
+
+    /// Plugin in dieser Welt ein- oder ausschalten.
+    pub fn set_plugin_enabled(&mut self, meta: &PluginMeta, on: bool) {
+        if on && !self.plugin_enabled(&meta.id) {
+            self.world.plugins.push(meta.id.clone());
+            self.load_plugin(meta.clone());
+        } else if !on && self.plugin_enabled(&meta.id) {
+            self.store_plugin_vars();
+            if let Some(p) = self.plugins.iter().find(|p| p.meta.id == meta.id) {
+                p.engine.call_if_exists("OnPluginDisable", ());
+            }
+            self.drain_actions(0);
+            self.world.plugins.retain(|p| p != &meta.id);
+            self.plugins.retain(|p| p.meta.id != meta.id);
+            self.note(&format!("Plugin deaktiviert: {}", meta.name));
+        }
+    }
+
+    /// Ruft einen Callback in allen Plugins auf.
+    fn plugins_call(&mut self, name: &str) {
+        for p in &self.plugins {
+            p.engine.call_if_exists(name, ());
+        }
+        self.drain_actions(0);
+    }
+
+    /// Fragt alle Plugins; liefert `false`, sobald eines `false` zurückgibt.
+    /// Aktionen (Send, Note …) der Plugins bleiben in der Warteschlange, bis `drain_actions` läuft.
+    fn plugins_allow(&mut self, callback: &str, arg: &str) -> bool {
+        let mut allow = true;
+        for p in &self.plugins {
+            if p.engine.call_bool(callback, arg.to_string()) == Some(false) {
+                allow = false;
+            }
+        }
+        allow
+    }
+
     pub fn save_world(&mut self) -> Result<PathBuf, String> {
+        self.store_plugin_vars();
         self.world.variables = self.script.shared.borrow().variables.clone();
         let path = self
             .world_path
@@ -267,6 +359,8 @@ impl Session {
         }
         self.script.call_if_exists("OnConnect", ());
         self.drain_actions(0);
+        self.plugins_call("OnPluginConnect");
+        self.drain_actions(0);
     }
 
     fn on_disconnected(&mut self, reason: String) {
@@ -281,6 +375,7 @@ impl Session {
         self.error(&reason);
         if was_connected {
             self.script.call_if_exists("OnDisconnect", ());
+            self.plugins_call("OnPluginDisconnect");
             self.drain_actions(0);
         }
         self.logger = None;
@@ -302,13 +397,19 @@ impl Session {
             TelnetEvent::HideInput(h) => self.hide_input = h,
             TelnetEvent::Gmcp { package, data } => {
                 insert_path(&mut self.gmcp_tree, &package, data.clone());
-                self.script.on_gmcp(&package, &data);
+                self.script.on_gmcp(&package, &data, "OnGMCP");
+                for p in &self.plugins {
+                    p.engine.on_gmcp(&package, &data, "OnPluginGMCP");
+                }
                 self.drain_actions(0);
             }
             TelnetEvent::Msdp(vars) => {
                 for (k, v) in vars {
                     self.msdp_tree.insert(k.clone(), v.clone());
-                    self.script.on_msdp(&k, &v);
+                    self.script.on_msdp(&k, &v, "OnMSDP");
+                    for p in &self.plugins {
+                        p.engine.on_msdp(&k, &v, "OnPluginMSDP");
+                    }
                 }
                 self.drain_actions(0);
             }
@@ -351,7 +452,10 @@ impl Session {
         } else {
             Vec::new()
         };
-        let omit = fired.iter().any(|(t, _)| t.omit_from_output);
+        // Plugins dürfen Zeilen ausblenden (OnPluginLineReceived → false)
+        let plugin_omit =
+            run_triggers && !self.plugins.is_empty() && !self.plugins_allow("OnPluginLineReceived", &plain);
+        let omit = plugin_omit || fired.iter().any(|(t, _)| t.omit_from_output);
         let omit_log = fired.iter().any(|(t, _)| t.omit_from_log);
         if !omit_log {
             if let Some(l) = self.logger.as_mut() {
@@ -360,6 +464,9 @@ impl Session {
         }
         if !omit {
             self.push_output(line);
+        }
+        if plugin_omit || !self.plugins.is_empty() {
+            self.drain_actions(0);
         }
         for (t, m) in fired {
             if !t.send.is_empty() {
@@ -426,6 +533,14 @@ impl Session {
     }
 
     fn execute_single(&mut self, cmd: &str, depth: usize) {
+        // Plugins dürfen Befehle abfangen (OnPluginCommand → false)
+        if !self.plugins.is_empty() {
+            let allow = self.plugins_allow("OnPluginCommand", cmd);
+            self.drain_actions(depth + 1);
+            if !allow {
+                return;
+            }
+        }
         let swp = self.world.speedwalk_prefix.clone();
         if !swp.is_empty() {
             if let Some(walk) = cmd.strip_prefix(swp.as_str()) {
@@ -608,7 +723,10 @@ impl Session {
 
     fn drain_actions(&mut self, depth: usize) {
         for _ in 0..1000 {
-            let actions = self.script.take_actions();
+            let mut actions = self.script.take_actions();
+            for p in &self.plugins {
+                actions.extend(p.engine.take_actions());
+            }
             if actions.is_empty() {
                 return;
             }
@@ -760,6 +878,44 @@ mod tests {
         s.on_data(b"Bob gr\xfc\xdft dich.\r\n");
         let texts: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
         assert_eq!(texts, vec!["Bob grüßt dich.", "Gruß von Bob"]);
+    }
+
+    #[test]
+    fn plugin_hooks() {
+        let dir = std::env::temp_dir().join(format!("rustmud-plg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"
+            function OnPluginLineReceived(z)
+              if z:find("Werbung") then return false end
+              if z:find("LP: (%d+)") and tonumber(z:match("LP: (%d+)")) < 30 then Note("Achtung, LP niedrig!") end
+              return true
+            end
+            function OnPluginCommand(c)
+              if c == "zaehle" then SetVariable("n", (tonumber(GetVariable("n")) or 0) + 1); Note("gezählt"); return false end
+              return true
+            end
+            "#,
+        )
+        .unwrap();
+        let meta = crate::plugins::PluginMeta {
+            id: "t".into(),
+            name: "T".into(),
+            dir: dir.clone(),
+            ..Default::default()
+        };
+        let mut s = Session::new(World::default(), None, Arc::new(|| {}));
+        s.world.plugins.push("t".into());
+        s.load_plugin(meta);
+        let before = s.lines.len();
+        s.on_data(b"Werbung: kauft Schwerter!\r\nLP: 12\r\n");
+        s.user_input("zaehle");
+        let texts: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(texts, vec!["LP: 12", "Achtung, LP niedrig!", "gezählt"]);
+        s.save_world_vars_for_test();
+        assert_eq!(s.world.plugin_vars["t"]["n"], "1");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

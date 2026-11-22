@@ -236,6 +236,10 @@ pub struct World {
     pub keypad_enabled: bool,
     pub keypad: BTreeMap<String, String>,
     pub buttons: Vec<UserButton>,
+    /// Kennungen der in dieser Welt aktiven Plugins
+    pub plugins: Vec<String>,
+    /// Variablen der Plugins (Plugin-Kennung → Name → Wert)
+    pub plugin_vars: BTreeMap<String, BTreeMap<String, String>>,
     pub triggers: Vec<Trigger>,
     pub aliases: Vec<Alias>,
     pub timers: Vec<Timer>,
@@ -269,6 +273,8 @@ impl Default for World {
             keypad_enabled: true,
             keypad: default_keypad(),
             buttons: Vec::new(),
+            plugins: Vec::new(),
+            plugin_vars: BTreeMap::new(),
             triggers: Vec::new(),
             aliases: Vec::new(),
             timers: Vec::new(),

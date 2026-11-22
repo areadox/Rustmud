@@ -22,6 +22,9 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 - Ziffernblock zum Laufen, frei belegbar (unter Windows exakte Erkennung)
 - Windows-Installer (NSIS, ohne Adminrechte) und Update-Funktion über GitHub-Releases
 - Programmsymbol
+- Andockbereich: alle Fenster erscheinen als Tabs rechts neben der Ausgabe
+- Plugin-Schnittstelle (Lua, eigener Zustand pro Plugin, pro Welt aktivierbar) und Plugin-Manager
+- Beispiel-Plugin „LP-Warnung“
 
 [Unveröffentlicht]: https://github.com/areadox/Rustmud/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/areadox/Rustmud/releases/tag/v0.0.1

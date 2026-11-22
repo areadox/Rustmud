@@ -280,6 +280,38 @@ impl ScriptEngine {
         }
     }
 
+    /// Für Plugins: GetPluginID(), GetPluginName(), GetPluginDirectory().
+    pub fn set_plugin_info(&self, id: &str, name: &str, dir: &str) {
+        let r = (|| -> mlua::Result<()> {
+            let g = self.lua.globals();
+            let (id, name, dir) = (id.to_string(), name.to_string(), dir.to_string());
+            g.set("GetPluginID", self.lua.create_function(move |_, ()| Ok(id.clone()))?)?;
+            g.set(
+                "GetPluginName",
+                self.lua.create_function(move |_, ()| Ok(name.clone()))?,
+            )?;
+            g.set(
+                "GetPluginDirectory",
+                self.lua.create_function(move |_, ()| Ok(dir.clone()))?,
+            )?;
+            Ok(())
+        })();
+        self.report(r);
+    }
+
+    /// Ruft eine globale Funktion auf und liefert ihren Rückgabewert, falls er ein Wahrheitswert ist.
+    /// `None`, wenn die Funktion fehlt, fehlschlägt oder nichts Boolesches zurückgibt.
+    pub fn call_bool(&self, name: &str, args: impl mlua::IntoLuaMulti) -> Option<bool> {
+        let f = match self.lua.globals().get::<LuaValue>(name) {
+            Ok(LuaValue::Function(f)) => f,
+            _ => return None,
+        };
+        match self.report(f.call::<LuaValue>(args))? {
+            LuaValue::Boolean(b) => Some(b),
+            _ => None,
+        }
+    }
+
     /// Ruft eine globale Funktion auf, falls vorhanden.
     pub fn call_if_exists(&self, name: &str, args: impl mlua::IntoLuaMulti) -> bool {
         let f: mlua::Result<LuaValue> = self.lua.globals().get(name);
@@ -336,7 +368,7 @@ impl ScriptEngine {
     }
 
     /// Schreibt GMCP-Daten in die verschachtelte Tabelle `gmcp` und ruft `OnGMCP(paket)` auf.
-    pub fn on_gmcp(&self, package: &str, data: &serde_json::Value) {
+    pub fn on_gmcp(&self, package: &str, data: &serde_json::Value, callback: &str) {
         let r = (|| -> mlua::Result<()> {
             let mut table: Table = self.lua.globals().get("gmcp")?;
             let parts: Vec<&str> = package.split('.').collect();
@@ -357,16 +389,16 @@ impl ScriptEngine {
             Ok(())
         })();
         self.report(r);
-        self.call_if_exists("OnGMCP", (package.to_string(), data.to_string()));
+        self.call_if_exists(callback, (package.to_string(), data.to_string()));
     }
 
-    pub fn on_msdp(&self, var: &str, data: &serde_json::Value) {
+    pub fn on_msdp(&self, var: &str, data: &serde_json::Value, callback: &str) {
         let r = (|| -> mlua::Result<()> {
             let t: Table = self.lua.globals().get("msdp")?;
             t.set(var, self.lua.to_value(data)?)
         })();
         self.report(r);
-        self.call_if_exists("OnMSDP", var.to_string());
+        self.call_if_exists(callback, var.to_string());
     }
 }
 
@@ -417,7 +449,7 @@ mod tests {
     fn gmcp_table() {
         let e = ScriptEngine::new(BTreeMap::new(), "Test");
         e.run("function OnGMCP(p) Note(p .. '=' .. gmcp.Char.Vitals.hp) end", "t");
-        e.on_gmcp("Char.Vitals", &serde_json::json!({"hp": 42}));
+        e.on_gmcp("Char.Vitals", &serde_json::json!({"hp": 42}), "OnGMCP");
         let a = e.take_actions();
         assert!(matches!(&a[0], Action::Note(l) if l.plain() == "Char.Vitals=42"));
     }

@@ -1,0 +1,6 @@
+id = "lp-warnung"
+name = "LP-Warnung"
+version = "1.0.0"
+author = "areadox"
+description = "Warnt farbig, wenn die Lebenspunkte unter eine Grenze fallen (GMCP Char.Vitals oder Zeile „LP: x“). Grenze setzen mit: lpwarnung <zahl>"
+main = "main.lua"

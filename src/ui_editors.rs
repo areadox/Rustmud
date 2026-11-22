@@ -150,7 +150,7 @@ pub fn triggers(ui: &mut Ui, s: &mut Session, st: &mut EditorState) {
         },
     );
     if let Some(t) = st.selected.and_then(|i| s.world.triggers.get_mut(i)) {
-        ScrollArea::vertical().id_salt("detail").show(ui, |ui| {
+        ui.scope(|ui| {
             Grid::new("trg").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Name");
                 changed |= ui.text_edit_singleline(&mut t.name).changed();
@@ -234,7 +234,7 @@ pub fn aliases(ui: &mut Ui, s: &mut Session, st: &mut EditorState) {
         },
     );
     if let Some(a) = st.selected.and_then(|i| s.world.aliases.get_mut(i)) {
-        ScrollArea::vertical().id_salt("detail").show(ui, |ui| {
+        ui.scope(|ui| {
             Grid::new("ali").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Name");
                 changed |= ui.text_edit_singleline(&mut a.name).changed();
@@ -399,7 +399,7 @@ pub fn world_settings(ui: &mut Ui, s: &mut Session) -> bool {
     let mut reload = false;
     let w = &mut s.world;
     let mut changed = false;
-    ScrollArea::vertical().show(ui, |ui| {
+    ui.scope(|ui| {
         ui.heading("Verbindung");
         Grid::new("conn").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label("Name");
@@ -685,5 +685,171 @@ pub fn buttons(ui: &mut Ui, s: &mut Session, sel: &mut Option<usize>) {
         ui.label(RichText::new("Beschriftung darf auch ein Symbol sein, z. B. ⚔ 🛡 🍺 ❤ ✨ ☠ 🏠").weak());
     } else {
         ui.label(RichText::new("Eigene Knöpfe erscheinen rechts in der Icon-Leiste. Mit „Neu“ anlegen.").weak());
+    }
+}
+
+/// Zustand des Plugin-Managers.
+#[derive(Default)]
+pub struct PluginUi {
+    cache: Option<(Vec<crate::plugins::PluginMeta>, Vec<String>)>,
+    new_name: String,
+    confirm_delete: Option<String>,
+    message: String,
+}
+
+/// Plugin-Manager: installierte Plugins anzeigen, pro Welt aktivieren, installieren, anlegen, löschen.
+pub fn plugins(ui: &mut Ui, s: &mut Session, st: &mut PluginUi) {
+    use crate::plugins as pl;
+    if st.cache.is_none() {
+        st.cache = Some(pl::list_plugins());
+    }
+    let mut refresh = false;
+
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("📥 Ordner installieren …")
+            .on_hover_text("Plugin-Ordner mit plugin.toml")
+            .clicked()
+        {
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                st.message = match pl::install_from_dir(&dir) {
+                    Ok(m) => format!("„{}“ installiert.", m.name),
+                    Err(e) => format!("Fehler: {e}"),
+                };
+                refresh = true;
+            }
+        }
+        if ui.button("📥 Lua-Datei installieren …").clicked() {
+            if let Some(file) = rfd::FileDialog::new().add_filter("Lua", &["lua"]).pick_file() {
+                st.message = match pl::install_from_lua(&file) {
+                    Ok(m) => format!("„{}“ installiert.", m.name),
+                    Err(e) => format!("Fehler: {e}"),
+                };
+                refresh = true;
+            }
+        }
+        if ui.button("📂 Plugin-Ordner").clicked() {
+            let _ = std::fs::create_dir_all(pl::plugins_dir());
+            crate::updater::open_url(&pl::plugins_dir().display().to_string());
+        }
+        if ui
+            .button("🔄 Neu laden")
+            .on_hover_text("Liste neu einlesen und aktive Plugins neu laden")
+            .clicked()
+        {
+            refresh = true;
+            s.reload_plugins();
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(
+            TextEdit::singleline(&mut st.new_name)
+                .hint_text("Name für neues Plugin")
+                .desired_width(200.0),
+        );
+        if ui
+            .add_enabled(
+                !st.new_name.trim().is_empty(),
+                egui::Button::new("➕ Neues Plugin anlegen"),
+            )
+            .clicked()
+        {
+            st.message = match pl::create_template(&st.new_name, "") {
+                Ok(m) => {
+                    crate::updater::open_url(&m.main_path().display().to_string());
+                    st.new_name.clear();
+                    format!("„{}“ angelegt in {}", m.name, m.dir.display())
+                }
+                Err(e) => format!("Fehler: {e}"),
+            };
+            refresh = true;
+        }
+    });
+    if !st.message.is_empty() {
+        ui.label(RichText::new(&st.message).weak());
+    }
+    ui.separator();
+
+    let (list, errors) = st.cache.clone().unwrap_or_default();
+    if list.is_empty() {
+        ui.label("Noch keine Plugins installiert.");
+    }
+    for m in &list {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let mut on = s.plugin_enabled(&m.id);
+                if ui.checkbox(&mut on, "").on_hover_text("In dieser Welt aktiv").changed() {
+                    s.set_plugin_enabled(m, on);
+                }
+                ui.label(RichText::new(&m.name).strong());
+                ui.label(RichText::new(format!("v{}", m.version)).weak());
+                if !m.author.is_empty() {
+                    ui.label(RichText::new(format!("von {}", m.author)).weak());
+                }
+            });
+            if !m.description.is_empty() {
+                ui.label(&m.description);
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&m.id).monospace().weak());
+                if ui.small_button("📂").on_hover_text("Ordner öffnen").clicked() {
+                    crate::updater::open_url(&m.dir.display().to_string());
+                }
+                if ui
+                    .small_button("✏")
+                    .on_hover_text("Lua-Datei im Editor öffnen")
+                    .clicked()
+                {
+                    crate::updater::open_url(&m.main_path().display().to_string());
+                }
+                if st.confirm_delete.as_deref() == Some(m.id.as_str()) {
+                    if ui
+                        .small_button(RichText::new("Wirklich löschen?").color(egui::Color32::LIGHT_RED))
+                        .clicked()
+                    {
+                        s.set_plugin_enabled(m, false);
+                        st.message = match pl::delete(m) {
+                            Ok(()) => format!("„{}“ gelöscht.", m.name),
+                            Err(e) => format!("Fehler: {e}"),
+                        };
+                        st.confirm_delete = None;
+                        refresh = true;
+                    }
+                    if ui.small_button("Nein").clicked() {
+                        st.confirm_delete = None;
+                    }
+                } else if ui.small_button("🗑").on_hover_text("Plugin löschen").clicked() {
+                    st.confirm_delete = Some(m.id.clone());
+                }
+            });
+        });
+    }
+    for e in &errors {
+        ui.label(RichText::new(format!("Defektes Plugin: {e}")).color(egui::Color32::LIGHT_RED));
+    }
+    ui.separator();
+    ui.collapsing("Wie schreibe ich ein Plugin?", |ui| {
+        ui.label(
+            "Ein Plugin ist ein Ordner mit plugin.toml (Name, Version, Autor, Beschreibung) und main.lua. \
+             Es läuft in einem eigenen Lua-Zustand und kann die ganze Lua-API benutzen. Callbacks:",
+        );
+        for (f, d) in [
+            ("OnPluginInstall()", "beim Laden"),
+            ("OnPluginConnect() / OnPluginDisconnect()", "Verbindung"),
+            ("OnPluginLineReceived(zeile)", "jede Zeile; false = ausblenden"),
+            ("OnPluginCommand(befehl)", "jeder Befehl; false = nicht senden"),
+            ("OnPluginGMCP(paket, json) / OnPluginMSDP(var)", "Protokolldaten"),
+            ("OnPluginDisable()", "beim Deaktivieren"),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(f).monospace());
+                ui.label(RichText::new(d).weak());
+            });
+        }
+        ui.label("Zusätzlich: GetPluginID(), GetPluginName(), GetPluginDirectory().");
+    });
+    if refresh {
+        st.cache = None;
     }
 }

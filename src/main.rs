@@ -7,6 +7,7 @@ mod automation;
 mod keypad;
 mod logger;
 mod net;
+mod plugins;
 mod scripting;
 mod session;
 mod telnet;
