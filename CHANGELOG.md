@@ -6,7 +6,7 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unveröffentlicht]
 
-## [0.1.0] – 2026-11-22
+## [0.0.1] – 2026-11-22
 
 ### Hinzugefügt
 - Telnet mit Optionsverhandlung, GA/EOR-Prompts und Passwortmodus
@@ -18,5 +18,5 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 - Befehlstrenner, Speedwalk, Lua in der Eingabezeile, Befehlshistorie
 - Logging, GMCP/MSDP-Inspektor, automatisches (Neu-)Verbinden
 
-[Unveröffentlicht]: https://github.com/areadox/Rustmud/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/areadox/Rustmud/releases/tag/v0.1.0
+[Unveröffentlicht]: https://github.com/areadox/Rustmud/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/areadox/Rustmud/releases/tag/v0.0.1

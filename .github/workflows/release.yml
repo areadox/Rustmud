@@ -1,6 +1,6 @@
 name: Release
 
-# Startet bei einem Versions-Tag, z. B.: git tag v0.1.0 && git push origin v0.1.0
+# Startet bei einem Versions-Tag, z. B.: git tag v0.0.1 && git push origin v0.0.1
 on:
   push:
     tags: ["v*"]
