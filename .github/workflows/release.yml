@@ -1,12 +1,15 @@
 name: Release
 
-# Startet bei einem Versions-Tag (git tag v0.0.1 && git push origin v0.0.1)
-# oder wenn auf GitHub unter „Releases“ ein Release veröffentlicht wird.
+# Startet bei jedem neuen Versions-Tag – egal ob per
+# „git tag v0.0.2 && git push origin v0.0.2“ oder beim Veröffentlichen eines
+# Releases auf GitHub (dabei wird der Tag ebenfalls angelegt).
 on:
   push:
     tags: ["v*"]
-  release:
-    types: [published]
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
