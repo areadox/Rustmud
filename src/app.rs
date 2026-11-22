@@ -28,6 +28,7 @@ enum Panel {
     Keypad,
     Buttons,
     Plugins,
+    Map,
     Gmcp,
     About,
 }
@@ -44,6 +45,7 @@ impl Panel {
             Panel::Keypad => "🔢 Ziffernblock",
             Panel::Buttons => "🔘 Knöpfe",
             Panel::Plugins => "📦 Plugins",
+            Panel::Map => "🗺 Karte",
             Panel::Gmcp => "📡 GMCP",
             Panel::About => "Über",
         }
@@ -61,6 +63,8 @@ struct View {
     tim: EditorState,
     vars: VarState,
     button_sel: Option<usize>,
+    /// Kartenstand, den das Fenster schon kennt (zum automatischen Öffnen)
+    map_seen: u64,
 }
 
 impl View {
@@ -76,6 +80,7 @@ impl View {
             tim: EditorState::default(),
             vars: VarState::default(),
             button_sel: None,
+            map_seen: 0,
         }
     }
 }
@@ -340,6 +345,7 @@ impl MudApp {
                     (Panel::Keypad, "🔢 Ziffernblock …"),
                     (Panel::Buttons, "🔘 Eigene Knöpfe …"),
                     (Panel::Plugins, "📦 Plugins …"),
+                    (Panel::Map, "🗺 Karte …"),
                 ] {
                     if ui.button(label).clicked() {
                         req = Some(p);
@@ -442,6 +448,7 @@ impl MudApp {
                 (Panel::Variables, "📋", "Variablen"),
                 (Panel::Keypad, "🔢", "Ziffernblock"),
                 (Panel::Plugins, "📦", "Plugins"),
+                (Panel::Map, "🗺", "Karte"),
             ] {
                 if ui.selectable_label(is_open(p), big(icon)).on_hover_text(tip).clicked() {
                     toggle = Some(p);
@@ -947,6 +954,68 @@ impl MudApp {
             Panel::Keypad => ui_editors::keypad(ui, &mut v.session),
             Panel::Buttons => ui_editors::buttons(ui, &mut v.session, &mut v.button_sel),
             Panel::Plugins => ui_editors::plugins(ui, &mut v.session, &mut self.plugin_ui),
+            Panel::Map => {
+                let w = &mut v.session.world;
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut w.map_capture, "Karte aus der Ausgabe holen");
+                    ui.checkbox(&mut w.map_fit, "An Fenster anpassen");
+                    ui.add_enabled(
+                        !w.map_fit,
+                        egui::Slider::new(&mut w.map_font_size, 8.0..=40.0).text("Größe"),
+                    );
+                });
+                if !w.map_capture {
+                    ui.label(
+                        RichText::new(
+                            "Ist das eingeschaltet, wird eine ASCII-Karte am Zeilenanfang (Rahmen +----+ und Zeilen |....|) \
+                             aus der Ausgabe herausgeschnitten und hier angezeigt.",
+                        )
+                        .weak(),
+                    );
+                }
+                // Karte wächst mit der Erfahrung – Schriftgröße so wählen, dass sie ganz hineinpasst
+                let cols = v
+                    .session
+                    .map
+                    .iter()
+                    .map(|l| l.plain().chars().count())
+                    .max()
+                    .unwrap_or(1)
+                    .max(1) as f32;
+                let rows = v.session.map.len().max(1) as f32;
+                let size = if w.map_fit {
+                    let probe = FontId::monospace(20.0);
+                    let (cw, rh) = ui.fonts(|f| (f.glyph_width(&probe, 'M') / 20.0, f.row_height(&probe) / 20.0));
+                    let avail = ui.available_size() - egui::vec2(24.0, 24.0);
+                    let by_w = avail.x / (cols * cw);
+                    let by_h = (avail.y.max(200.0)) / (rows * rh);
+                    by_w.min(by_h).clamp(6.0, 60.0)
+                } else {
+                    w.map_font_size
+                };
+                let font = FontId::monospace(size);
+                if !v.session.map.is_empty() {
+                    ui.label(
+                        RichText::new(format!("{} × {} Zeichen", cols as usize, rows as usize))
+                            .weak()
+                            .small(),
+                    );
+                }
+                if v.session.map.is_empty() {
+                    ui.label(RichText::new("Noch keine Karte empfangen.").weak());
+                } else {
+                    let bg = Color32::from_rgb(DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2);
+                    egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for line in &v.session.map {
+                            let mut job = LayoutJob::default();
+                            job.wrap.max_width = f32::INFINITY;
+                            line_job(line, &font, &mut job);
+                            ui.add(egui::Label::new(job).extend());
+                        }
+                    });
+                }
+            }
             Panel::Gmcp => {
                 ui.heading("GMCP");
                 if let Some(map) = v.session.gmcp_tree.as_object() {
@@ -1046,6 +1115,17 @@ impl eframe::App for MudApp {
         if let Some(v) = self.views.get_mut(self.active) {
             for k in keys {
                 v.session.keypad(k);
+            }
+        }
+
+        // Kartenfenster beim ersten Empfang einer Karte automatisch öffnen
+        if let Some(v) = self.views.get_mut(self.active) {
+            if v.session.map_version > 0 && v.map_seen == 0 {
+                v.map_seen = v.session.map_version;
+                if !self.panels.contains(&Panel::Map) {
+                    self.panels.push(Panel::Map);
+                    self.panel.get_or_insert(Panel::Map);
+                }
             }
         }
 

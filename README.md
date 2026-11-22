@@ -21,6 +21,8 @@ Läuft unter Windows, Linux und macOS.
 - **Weltenverwaltung im Programm**: Welten anlegen, öffnen, verbinden, bearbeiten, umbenennen, duplizieren,
   löschen, importieren und exportieren; mehrere Welten gleichzeitig als Tabs
 - **Andockbereich**: Einstellungen, Trigger, Aliase, Plugins usw. öffnen sich als Tabs rechts neben der Ausgabe statt als schwebende Fenster
+- **Kartenfenster**: ASCII-Karten, die der MUD links neben den Raumtext setzt, werden herausgeschnitten und in einem
+  eigenen Fenster angezeigt – in der Ausgabe bleibt nur der Text
 - **Plugins**: eigenständige Lua-Erweiterungen mit eigenem Zustand, pro Welt aktivierbar, mit **Plugin-Manager**
 - **Icon-Leiste** für alle wichtigen Funktionen plus **eigene Knöpfe** pro Welt (z. B. „⚔ Angriff“ → `toete @ziel`)
 - **Ziffernblock zum Laufen**, pro Welt frei belegbar (Standard: deutsche Richtungen n, no, o, so, s, sw, w, nw, ob, u)
@@ -83,7 +85,7 @@ cargo test
 | 🌍 | Weltenverwaltung |
 | 🔌 / ⏏ | Verbinden / Trennen |
 | 💾 | Welt speichern |
-| ⚙ ⚡ ⌨ ⏱ 📋 🔢 📦 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock, Plugins |
+| ⚙ ⚡ ⌨ ⏱ 📋 🔢 📦 🗺 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock, Plugins, Karte |
 | 🔄 | Lua-Skript neu laden |
 | 📝 | Log starten/beenden |
 | 📡 | GMCP/MSDP-Daten anzeigen |
@@ -98,6 +100,29 @@ auf die gerade gewählte Welt.
 Eigene Knöpfe erscheinen rechts daneben. Sie können einen Befehl senden, wie eine Eingabe ausgeführt werden
 (mit Aliassen, `;` und Speedwalk), Lua-Code ausführen oder eine Notiz ausgeben.
 Die Leiste lässt sich unter **Ansicht → Icon-Leiste** ausblenden.
+
+### Kartenfenster
+
+Manche MUDs zeigen links neben der Raumbeschreibung eine kleine ASCII-Karte:
+
+```
++-------------+ Hier bist Du nun also am Eingang der legendaeren
+|*************| Dunkelelfenstadt "Corona" und ihr Anblick raubt Dir fast den
+|#(N)-[X]-( )-| Atem. Der Tunnel, der vor Dir liegt, wurde mit grossem
++-------------+ von Wasser.
+```
+
+Mit **Einstellungen → Karte → „ASCII-Karte in eigenes Fenster verschieben“** (oder dem Haken im Fenster 🗺 **Karte**)
+schneidet rustmud den Kartenblock aus der Ausgabe heraus und zeigt ihn farbig im Kartenfenster. In der Ausgabe bleibt
+nur der Text – auch Trigger und Log sehen nur den Text (das Log enthält zusätzlich die Karte).
+
+- Größe und Höhe der Karte werden bei jeder Karte neu aus dem Rahmen bestimmt, eine mit der Zeit wachsende Karte
+  wird also automatisch erkannt.
+- „An Fenster anpassen“ skaliert die Karte so, dass sie immer ganz in das Fenster passt; sonst lässt sich die
+  Größe von Hand einstellen.
+- Breitere Rahmen als die eingestellte **maximale Kartenbreite** (Standard 60) gelten als Tabelle und bleiben in
+  der Ausgabe, ebenso Tabellen mit Spaltentrennern wie `+----+----+`.
+- Beim ersten Empfang einer Karte öffnet sich das Kartenfenster automatisch.
 
 ### Ziffernblock
 

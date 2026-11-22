@@ -42,6 +42,11 @@ pub struct Session {
     pub term_size: (u16, u16),
     pub script: ScriptEngine,
     pub plugins: Vec<PluginInstance>,
+    /// Zuletzt erkannte Karte und Zähler (ändert sich bei jeder neuen Karte)
+    pub map: Vec<Line>,
+    pub map_version: u64,
+    map_building: Option<Vec<Line>>,
+    map_width: usize,
     conn: Option<Connection>,
     decoder: Decoder,
     ansi: AnsiParser,
@@ -86,6 +91,10 @@ impl Session {
             term_size: (80, 24),
             script,
             plugins: Vec::new(),
+            map: Vec::new(),
+            map_version: 0,
+            map_building: None,
+            map_width: 0,
             conn: None,
             ansi: AnsiParser::new(),
             automation: Automation::default(),
@@ -446,6 +455,12 @@ impl Session {
     /// Wie bei MUSHclient erscheint zuerst die Zeile, danach die Ausgaben der Trigger.
     fn finish_line(&mut self, run_triggers: bool) {
         let mut line = std::mem::take(&mut self.current);
+        if run_triggers && self.world.map_capture && !line.is_prompt {
+            match self.capture_map(line) {
+                Some(rest) => line = rest,
+                None => return,
+            }
+        }
         let plain = line.plain();
         let fired = if run_triggers {
             self.match_triggers(&mut line, &plain)
@@ -477,6 +492,71 @@ impl Session {
                     .call_handler(t.script.trim(), &t.name, &plain, &m.wildcards, &m.named);
             }
             self.drain_actions(0);
+        }
+    }
+
+    // ------------------------------------------------------------ Karte
+
+    /// Breite eines Kartenrahmens „+-----+“ am Zeilenanfang, falls vorhanden.
+    fn map_border_width(chars: &[char], max: usize) -> Option<usize> {
+        if chars.first() != Some(&'+') {
+            return None;
+        }
+        let end = chars[1..].iter().position(|c| *c != '-')? + 1;
+        let w = end + 1;
+        let ok = chars[end] == '+' && w >= 5 && w <= max && (chars.len() == w || chars[w] == ' ');
+        ok.then_some(w)
+    }
+
+    /// Schneidet eine ASCII-Karte (Rahmen „+---+“, Zeilen „|...|“) aus der Ausgabe heraus.
+    /// Liefert den restlichen Text der Zeile oder `None`, wenn nichts übrig bleibt.
+    fn capture_map(&mut self, line: Line) -> Option<Line> {
+        let plain = line.plain();
+        let chars: Vec<char> = plain.chars().collect();
+        let max = self.world.map_max_width.max(5);
+        let Some(mut rows) = self.map_building.take() else {
+            let Some(w) = Self::map_border_width(&chars, max) else {
+                return Some(line); // keine Karte – Zeile unverändert
+            };
+            self.map_width = w;
+            if let Some(l) = self.logger.as_mut() {
+                l.line(&plain);
+            }
+            let (map, rest) = line.split_at_char(w);
+            self.map_building = Some(vec![map]);
+            return Self::text_rest(rest);
+        };
+        let w = self.map_width;
+        let is_row =
+            chars.len() >= w && chars[0] == '|' && chars[w - 1] == '|' && (chars.len() == w || chars[w] == ' ');
+        let is_end = Self::map_border_width(&chars, max) == Some(w);
+        if !is_row && !is_end {
+            // Doch keine Karte mehr – bisherigen Stand übernehmen und Zeile normal behandeln
+            self.publish_map(rows);
+            return self.capture_map(line);
+        }
+        if let Some(l) = self.logger.as_mut() {
+            l.line(&plain);
+        }
+        let (map, rest) = line.split_at_char(w);
+        rows.push(map);
+        if is_end {
+            self.publish_map(rows);
+        } else {
+            self.map_building = Some(rows);
+        }
+        Self::text_rest(rest)
+    }
+
+    fn text_rest(rest: Line) -> Option<Line> {
+        let (_, text) = rest.split_at_char(1); // Leerzeichen zwischen Karte und Text
+        (!text.plain().trim().is_empty()).then_some(text)
+    }
+
+    fn publish_map(&mut self, rows: Vec<Line>) {
+        if rows.len() >= 2 {
+            self.map = rows;
+            self.map_version += 1;
         }
     }
 
@@ -916,6 +996,67 @@ mod tests {
         s.save_world_vars_for_test();
         assert_eq!(s.world.plugin_vars["t"]["n"], "1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn map_is_cut_out() {
+        let w = World {
+            map_capture: true,
+            ..World::default()
+        };
+        let mut s = Session::new(w, None, Arc::new(|| {}));
+        let before = s.lines.len();
+        let text = "\
++-------------+ Hier bist Du nun also am Eingang der
+|*************| Dunkelelfenstadt \"Corona\".
+|#(N)-[X]-( )-| In unregelmaessigen Abstaenden
+|******|*o***&| 
++-------------+ von Wasser.
+   Ausgaenge: Norden und Osten.
++----+----+
+| Name | LP |
+";
+        s.on_data(text.replace('\n', "\r\n").as_bytes());
+        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(
+            out,
+            vec![
+                "Hier bist Du nun also am Eingang der",
+                "Dunkelelfenstadt \"Corona\".",
+                "In unregelmaessigen Abstaenden",
+                "von Wasser.",
+                "   Ausgaenge: Norden und Osten.",
+                "+----+----+",
+                "| Name | LP |",
+            ]
+        );
+        let map: Vec<String> = s.map.iter().map(|l| l.plain()).collect();
+        assert_eq!(map.len(), 5);
+        assert_eq!(map[2], "|#(N)-[X]-( )-|");
+        assert_eq!(s.map_version, 1);
+    }
+
+    #[test]
+    fn map_size_can_change() {
+        let w = World {
+            map_capture: true,
+            ..World::default()
+        };
+        let mut s = Session::new(w, None, Arc::new(|| {}));
+        s.on_data(b"+-----+ klein\r\n|*(X)*| Raum\r\n+-----+\r\n");
+        assert_eq!(s.map.len(), 3);
+        let big = format!(
+            "+{0}+ Text\r\n{1}+{0}+\r\n",
+            "-".repeat(25),
+            (0..9)
+                .map(|i| format!("|{}| Zeile {i}\r\n", "*".repeat(25)))
+                .collect::<String>()
+        );
+        s.on_data(big.as_bytes());
+        assert_eq!(s.map.len(), 11);
+        assert_eq!(s.map[0].plain().chars().count(), 27);
+        assert_eq!(s.map_version, 2);
+        assert!(s.lines.iter().any(|l| l.plain() == "Zeile 8"));
     }
 
     #[test]

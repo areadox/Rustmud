@@ -494,6 +494,17 @@ pub fn world_settings(ui: &mut Ui, s: &mut Session) -> bool {
             ui.end_row();
         });
         ui.separator();
+        ui.heading("Karte");
+        Grid::new("map").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label("");
+            ui.checkbox(&mut w.map_capture, "ASCII-Karte in eigenes Fenster (🗺) verschieben");
+            ui.end_row();
+            ui.label("Max. Kartenbreite");
+            ui.add(DragValue::new(&mut w.map_max_width).range(5..=200))
+                .on_hover_text("Breitere Rahmen gelten als Tabelle und bleiben in der Ausgabe");
+            ui.end_row();
+        });
+        ui.separator();
         ui.heading("Skript & Log");
         Grid::new("script").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label("Lua-Datei");

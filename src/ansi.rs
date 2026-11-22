@@ -69,6 +69,27 @@ impl Line {
         self.spans.iter().all(|s| s.text.is_empty())
     }
 
+    /// Teilt die Zeile nach `n` Zeichen; Farben bleiben erhalten.
+    pub fn split_at_char(&self, n: usize) -> (Line, Line) {
+        let mut left = Line::default();
+        let mut right = Line {
+            is_prompt: self.is_prompt,
+            ..Line::default()
+        };
+        let mut i = 0;
+        for span in &self.spans {
+            for c in span.text.chars() {
+                if i < n {
+                    left.push(c, span.style);
+                } else {
+                    right.push(c, span.style);
+                }
+                i += 1;
+            }
+        }
+        (left, right)
+    }
+
     pub fn from_text(s: &str, style: Style) -> Self {
         let mut l = Line::default();
         l.push_str(s, style);
@@ -353,6 +374,16 @@ mod tests {
         let l = collect(&mut p, "\x1b[38;5;208mx\x1b[48;2;1;2;3my");
         assert_eq!(l[0].spans[0].style.fg, Color::Idx(208));
         assert_eq!(l[0].spans[1].style.bg, Color::Rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn split_keeps_styles() {
+        let mut p = AnsiParser::new();
+        let l = collect(&mut p, "|\x1b[31m*\x1b[0m| Text");
+        let (a, b) = l[0].split_at_char(3);
+        assert_eq!(a.plain(), "|*|");
+        assert_eq!(a.spans[1].style.fg, Color::Idx(1));
+        assert_eq!(b.plain(), " Text");
     }
 
     #[test]

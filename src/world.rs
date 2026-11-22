@@ -236,6 +236,13 @@ pub struct World {
     pub keypad_enabled: bool,
     pub keypad: BTreeMap<String, String>,
     pub buttons: Vec<UserButton>,
+    /// ASCII-Karte am Zeilenanfang (+----+ / |....|) in ein eigenes Fenster verschieben
+    pub map_capture: bool,
+    /// Maximale Breite der Karte inkl. Rahmen (schützt vor Verwechslung mit Tabellen)
+    pub map_max_width: usize,
+    pub map_font_size: f32,
+    /// Karte automatisch an die Fenstergröße anpassen
+    pub map_fit: bool,
     /// Kennungen der in dieser Welt aktiven Plugins
     pub plugins: Vec<String>,
     /// Variablen der Plugins (Plugin-Kennung → Name → Wert)
@@ -273,6 +280,10 @@ impl Default for World {
             keypad_enabled: true,
             keypad: default_keypad(),
             buttons: Vec::new(),
+            map_capture: false,
+            map_max_width: 60,
+            map_font_size: 18.0,
+            map_fit: true,
             plugins: Vec::new(),
             plugin_vars: BTreeMap::new(),
             triggers: Vec::new(),
