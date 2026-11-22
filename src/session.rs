@@ -485,12 +485,9 @@ impl Session {
         // Plugins dürfen Zeilen ausblenden oder umschreiben (OnPluginLineReceived)
         let mut plugin_omit = false;
         if run_triggers && !self.plugins.is_empty() {
-            for i in 0..self.plugins.len() {
+            for p in &self.plugins {
                 let (plain, ansi) = (line.plain(), line.to_ansi());
-                match self.plugins[i]
-                    .engine
-                    .call_line_hook("OnPluginLineReceived", &plain, &ansi)
-                {
+                match p.engine.call_line_hook("OnPluginLineReceived", &plain, &ansi) {
                     LineHook::Keep => {}
                     LineHook::Omit => {
                         plugin_omit = true;
