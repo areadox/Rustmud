@@ -1,0 +1,6 @@
+id = "spielstand"
+name = "Spielstand"
+version = "1.0.0"
+author = "areadox"
+description = "Zeigt den Spielstand (Befehl „sp“/„score“) übersichtlich mit Balken in einem eigenen Fenster statt als Tabelle in der Ausgabe. Nutzt zusätzlich GMCP-Werte (z. B. Char.Vitals), falls der MUD sie sendet."
+main = "main.lua"

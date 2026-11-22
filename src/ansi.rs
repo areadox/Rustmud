@@ -90,6 +90,41 @@ impl Line {
         (left, right)
     }
 
+    /// Wandelt die Zeile zurück in Text mit ANSI-Farbcodes (für Lua-Plugins).
+    pub fn to_ansi(&self) -> String {
+        let mut out = String::new();
+        let mut cur = Style::default();
+        for span in &self.spans {
+            if span.style != cur {
+                out.push_str(&sgr(&span.style));
+                cur = span.style;
+            }
+            out.push_str(&span.text);
+        }
+        if cur != Style::default() {
+            out.push_str("\x1b[0m");
+        }
+        out
+    }
+
+    /// Liest eine Zeile mit ANSI-Farbcodes ein (Zeilenumbrüche werden ignoriert).
+    pub fn from_ansi(s: &str) -> Self {
+        let mut p = AnsiParser::new();
+        let mut ev = Vec::new();
+        p.feed(s, &mut ev);
+        let mut l = Line::default();
+        for e in ev {
+            if let AnsiEvent::Char(c, st) = e {
+                l.push(c, st);
+            }
+        }
+        l
+    }
+
+    pub fn char_len(&self) -> usize {
+        self.spans.iter().map(|s| s.text.chars().count()).sum()
+    }
+
     pub fn from_text(s: &str, style: Style) -> Self {
         let mut l = Line::default();
         l.push_str(s, style);
@@ -228,6 +263,39 @@ impl AnsiParser {
             i += 1;
         }
     }
+}
+
+fn color_sgr(c: Color, fg: bool) -> String {
+    match c {
+        Color::Default => (if fg { "39" } else { "49" }).to_string(),
+        Color::Idx(i) if i < 8 => format!("{}", if fg { 30 } else { 40 } + i as u32),
+        Color::Idx(i) if i < 16 => format!("{}", if fg { 90 } else { 100 } + (i - 8) as u32),
+        Color::Idx(i) => format!("{};5;{i}", if fg { 38 } else { 48 }),
+        Color::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", if fg { 38 } else { 48 }),
+    }
+}
+
+fn sgr(st: &Style) -> String {
+    let mut parts = vec!["0".to_string()];
+    if st.bold {
+        parts.push("1".into());
+    }
+    if st.italic {
+        parts.push("3".into());
+    }
+    if st.underline {
+        parts.push("4".into());
+    }
+    if st.inverse {
+        parts.push("7".into());
+    }
+    if st.fg != Color::Default {
+        parts.push(color_sgr(st.fg, true));
+    }
+    if st.bg != Color::Default {
+        parts.push(color_sgr(st.bg, false));
+    }
+    format!("\x1b[{}m", parts.join(";"))
 }
 
 /// Standard-xterm-Palette für Index 0..=255.
@@ -384,6 +452,14 @@ mod tests {
         assert_eq!(a.plain(), "|*|");
         assert_eq!(a.spans[1].style.fg, Color::Idx(1));
         assert_eq!(b.plain(), " Text");
+    }
+
+    #[test]
+    fn ansi_roundtrip() {
+        let mut p = AnsiParser::new();
+        let l = collect(&mut p, "a\x1b[1;31mrot\x1b[0m \x1b[38;5;208mo\x1b[48;2;1;2;3mx");
+        let back = Line::from_ansi(&l[0].to_ansi());
+        assert_eq!(back, l[0]);
     }
 
     #[test]

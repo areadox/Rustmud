@@ -1,24 +1,24 @@
 //! Hauptfenster: Icon-Leiste, Welt-Tabs, Ausgabe, Eingabezeile, Menüs,
 //! Weltenverwaltung, Update-Hinweis und Statusleiste.
 
-use crate::ansi::{resolve, Line};
 use crate::session::{ConnState, Session, Waker};
 use crate::ui_editors::{self, EditorState, VarState};
 use crate::updater::{self, UpdateState};
 use crate::world::{config_dir, list_worlds, path_for, unique_name, Encoding, World};
 use egui::text::{CCursor, CCursorRange, LayoutJob};
 use egui::{Button, Color32, FontId, Key, RichText, ScrollArea, Stroke, TextEdit, TextFormat};
+use egui_dock::{DockArea, DockState};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_FG: (u8, u8, u8) = (192, 192, 192);
-const DEFAULT_BG: (u8, u8, u8) = (0, 0, 0);
+use crate::ui_widgets::{line_job, DEFAULT_BG};
 const HISTORY_MAX: usize = 500;
 
-/// Fenster, die im Andockbereich rechts als Tabs erscheinen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Panel {
+/// Alles, was im frei anordnbaren Fensterbereich erscheint – auch die Ausgabe selbst.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum Tab {
+    Output,
     Worlds,
     Settings,
     Triggers,
@@ -28,27 +28,30 @@ enum Panel {
     Keypad,
     Buttons,
     Plugins,
-    Map,
     Gmcp,
     About,
+    /// Fenster eines Plugins (Kennung des Fensters)
+    Plugin(String),
 }
 
-impl Panel {
-    fn title(self) -> &'static str {
+impl Tab {
+    fn title(&self) -> String {
         match self {
-            Panel::Worlds => "🌍 Welten",
-            Panel::Settings => "⚙ Einstellungen",
-            Panel::Triggers => "⚡ Trigger",
-            Panel::Aliases => "⌨ Aliase",
-            Panel::Timers => "⏱ Timer",
-            Panel::Variables => "📋 Variablen",
-            Panel::Keypad => "🔢 Ziffernblock",
-            Panel::Buttons => "🔘 Knöpfe",
-            Panel::Plugins => "📦 Plugins",
-            Panel::Map => "🗺 Karte",
-            Panel::Gmcp => "📡 GMCP",
-            Panel::About => "Über",
+            Tab::Output => "📜 Ausgabe",
+            Tab::Worlds => "🌍 Welten",
+            Tab::Settings => "⚙ Einstellungen",
+            Tab::Triggers => "⚡ Trigger",
+            Tab::Aliases => "⌨ Aliase",
+            Tab::Timers => "⏱ Timer",
+            Tab::Variables => "📋 Variablen",
+            Tab::Keypad => "🔢 Ziffernblock",
+            Tab::Buttons => "🔘 Knöpfe",
+            Tab::Plugins => "📦 Plugins",
+            Tab::Gmcp => "📡 GMCP",
+            Tab::About => "Über rustmud",
+            Tab::Plugin(id) => return id.clone(),
         }
+        .to_string()
     }
 }
 
@@ -63,8 +66,6 @@ struct View {
     tim: EditorState,
     vars: VarState,
     button_sel: Option<usize>,
-    /// Kartenstand, den das Fenster schon kennt (zum automatischen Öffnen)
-    map_seen: u64,
 }
 
 impl View {
@@ -80,7 +81,6 @@ impl View {
             tim: EditorState::default(),
             vars: VarState::default(),
             button_sel: None,
-            map_seen: 0,
         }
     }
 }
@@ -161,8 +161,8 @@ pub struct MudApp {
     ctx: egui::Context,
     wm: WorldManager,
     settings: AppState,
-    panels: Vec<Panel>,
-    panel: Option<Panel>,
+    /// Fensteranordnung (wird beim Anzeigen kurz herausgenommen)
+    dock: Option<DockState<Tab>>,
     plugin_ui: crate::ui_editors::PluginUi,
     update: updater::Shared,
     update_dismissed: bool,
@@ -175,7 +175,9 @@ impl MudApp {
         let c2 = ctx.clone();
         let waker: Waker = Arc::new(move || c2.request_repaint());
         crate::keypad::install(cc);
+        apply_theme(&cc.egui_ctx);
 
+        let installed = crate::plugins::install_bundled();
         let settings: AppState = std::fs::read_to_string(app_state_path())
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
@@ -187,12 +189,15 @@ impl MudApp {
             ctx: ctx.clone(),
             wm: WorldManager::default(),
             settings,
-            panels: Vec::new(),
-            panel: None,
+            dock: Some(load_layout()),
             plugin_ui: Default::default(),
             update: Arc::new(Mutex::new(UpdateState::Idle)),
             update_dismissed: false,
-            status: String::new(),
+            status: if installed.is_empty() {
+                String::new()
+            } else {
+                format!("Mitgelieferte Plugins installiert: {}", installed.join(", "))
+            },
         };
         for p in app.settings.open_worlds.clone() {
             if let Ok(w) = World::load(&p) {
@@ -201,7 +206,7 @@ impl MudApp {
         }
         app.active = app.settings.active.min(app.views.len().saturating_sub(1));
         if app.views.is_empty() {
-            app.open_panel(Panel::Worlds);
+            app.open_tab(Tab::Worlds);
         }
         if app.settings.check_updates {
             updater::check(app.update.clone(), ctx);
@@ -239,6 +244,9 @@ impl MudApp {
         self.settings.open_worlds = open;
         self.settings.active = self.active;
         self.save_settings();
+        if let Some(d) = &self.dock {
+            save_layout(d);
+        }
     }
 
     fn save_settings(&self) {
@@ -259,30 +267,70 @@ impl MudApp {
         }
     }
 
-    fn open_panel(&mut self, p: Panel) {
-        if !self.panels.contains(&p) {
-            self.panels.push(p);
-        }
-        self.panel = Some(p);
-        if p == Panel::Worlds {
+    fn dock_mut(&mut self) -> &mut DockState<Tab> {
+        self.dock.get_or_insert_with(default_layout)
+    }
+
+    fn is_open(&self, t: &Tab) -> bool {
+        self.dock.as_ref().is_some_and(|d| d.find_tab(t).is_some())
+    }
+
+    /// Fenster öffnen bzw. nach vorne holen. Neue Fenster kommen rechts neben die Ausgabe.
+    fn open_tab(&mut self, t: Tab) {
+        if t == Tab::Worlds {
             self.wm.worlds = None;
         }
-    }
-
-    fn close_panel(&mut self, p: Panel) {
-        self.panels.retain(|x| *x != p);
-        if self.panel == Some(p) {
-            self.panel = self.panels.last().copied();
+        let dock = self.dock_mut();
+        if let Some(loc) = dock.find_tab(&t) {
+            dock.set_active_tab(loc);
+            dock.set_focused_node_and_surface((loc.0, loc.1));
+            return;
+        }
+        // Gibt es im Hauptbereich schon einen Bereich neben der Ausgabe? Dann dorthin.
+        let output = dock.find_main_surface_tab(&Tab::Output).map(|(n, _)| n);
+        let side = dock
+            .iter_all_tabs()
+            .find(|((surface, node), tab)| **tab != Tab::Output && surface.is_main() && Some(*node) != output)
+            .map(|(loc, _)| loc);
+        // Plugin-Fenster (Karte, Spielstand …) untereinander statt als Tabs hintereinander
+        let plugin_leaf = dock
+            .iter_all_tabs()
+            .find(|((surface, _), tab)| surface.is_main() && matches!(tab, Tab::Plugin(_)))
+            .map(|((_, node), _)| node);
+        if let (Tab::Plugin(_), Some(node)) = (&t, plugin_leaf) {
+            dock.main_surface_mut().split_below(node, 0.45, vec![t]);
+            return;
+        }
+        match (side, output) {
+            (Some(loc), _) => {
+                dock.set_focused_node_and_surface(loc);
+                dock.push_to_focused_leaf(t);
+            }
+            (None, Some(out)) => {
+                dock.main_surface_mut().split_right(out, 0.62, vec![t]);
+            }
+            (None, None) => dock.push_to_first_leaf(t),
         }
     }
 
-    /// Icon-Leiste: öffnen bzw. nach vorne holen; ist es schon vorne, schließen.
-    fn toggle_panel(&mut self, p: Panel) {
-        if self.panel == Some(p) && self.panels.contains(&p) {
-            self.close_panel(p);
+    fn close_tab(&mut self, t: Tab) {
+        let dock = self.dock_mut();
+        if let Some(loc) = dock.find_tab(&t) {
+            dock.remove_tab(loc);
+        }
+    }
+
+    /// Icon-Leiste: geöffnetes Fenster schließen, sonst öffnen.
+    fn toggle_tab(&mut self, t: Tab) {
+        if self.is_open(&t) {
+            self.close_tab(t);
         } else {
-            self.open_panel(p);
+            self.open_tab(t);
         }
+    }
+
+    fn reset_layout(&mut self) {
+        self.dock = Some(default_layout());
     }
 
     fn view_index(&self, path: &PathBuf) -> Option<usize> {
@@ -304,11 +352,11 @@ impl MudApp {
     // ------------------------------------------------------------ Menü
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        let mut req: Option<Panel> = None;
+        let mut req: Option<Tab> = None;
         egui::menu::bar(ui, |ui| {
             ui.menu_button("Welt", |ui| {
                 if ui.button("🌍 Weltenverwaltung …").clicked() {
-                    req = Some(Panel::Worlds);
+                    req = Some(Tab::Worlds);
                     ui.close_menu();
                 }
                 let has = !self.views.is_empty();
@@ -337,15 +385,14 @@ impl MudApp {
             });
             ui.menu_button("Konfiguration", |ui| {
                 for (p, label) in [
-                    (Panel::Settings, "⚙ Welt-Einstellungen …"),
-                    (Panel::Triggers, "⚡ Trigger …"),
-                    (Panel::Aliases, "⌨ Aliase …"),
-                    (Panel::Timers, "⏱ Timer …"),
-                    (Panel::Variables, "📋 Variablen …"),
-                    (Panel::Keypad, "🔢 Ziffernblock …"),
-                    (Panel::Buttons, "🔘 Eigene Knöpfe …"),
-                    (Panel::Plugins, "📦 Plugins …"),
-                    (Panel::Map, "🗺 Karte …"),
+                    (Tab::Settings, "⚙ Welt-Einstellungen …"),
+                    (Tab::Triggers, "⚡ Trigger …"),
+                    (Tab::Aliases, "⌨ Aliase …"),
+                    (Tab::Timers, "⏱ Timer …"),
+                    (Tab::Variables, "📋 Variablen …"),
+                    (Tab::Keypad, "🔢 Ziffernblock …"),
+                    (Tab::Buttons, "🔘 Eigene Knöpfe …"),
+                    (Tab::Plugins, "📦 Plugins …"),
                 ] {
                     if ui.button(label).clicked() {
                         req = Some(p);
@@ -368,12 +415,11 @@ impl MudApp {
             ui.menu_button("Ansicht", |ui| {
                 ui.checkbox(&mut self.settings.show_toolbar, "Icon-Leiste");
                 if ui.button("📡 GMCP/MSDP-Daten").clicked() {
-                    req = Some(Panel::Gmcp);
+                    req = Some(Tab::Gmcp);
                     ui.close_menu();
                 }
-                if ui.button("Alle angedockten Fenster schließen").clicked() {
-                    self.panels.clear();
-                    self.panel = None;
+                if ui.button("Fensteranordnung zurücksetzen").clicked() {
+                    self.reset_layout();
                     ui.close_menu();
                 }
                 if let Some(v) = self.views.get_mut(self.active) {
@@ -387,7 +433,7 @@ impl MudApp {
                 if ui.button("Nach Updates suchen").clicked() {
                     self.update_dismissed = false;
                     updater::check(self.update.clone(), self.ctx.clone());
-                    req = Some(Panel::About);
+                    req = Some(Tab::About);
                     ui.close_menu();
                 }
                 if ui.button("Projektseite (GitHub)").clicked() {
@@ -395,13 +441,13 @@ impl MudApp {
                     ui.close_menu();
                 }
                 if ui.button("Über rustmud / Programmeinstellungen …").clicked() {
-                    req = Some(Panel::About);
+                    req = Some(Tab::About);
                     ui.close_menu();
                 }
             });
         });
         if let Some(p) = req {
-            self.open_panel(p);
+            self.open_tab(p);
         }
     }
 
@@ -409,17 +455,21 @@ impl MudApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let big = |s: &str| RichText::new(s).size(18.0);
-        let mut toggle: Option<Panel> = None;
+        let mut toggle: Option<Tab> = None;
         let mut save = false;
-        let open_panels = self.panels.clone();
-        let is_open = |p: Panel| open_panels.contains(&p);
+        let open_tabs: Vec<Tab> = self
+            .dock
+            .as_ref()
+            .map(|d| d.iter_all_tabs().map(|(_, t)| t.clone()).collect())
+            .unwrap_or_default();
+        let is_open = |p: &Tab| open_tabs.contains(p);
         ui.horizontal(|ui| {
             if ui
-                .selectable_label(is_open(Panel::Worlds), big("🌍"))
+                .selectable_label(is_open(&Tab::Worlds), big("🌍"))
                 .on_hover_text("Weltenverwaltung")
                 .clicked()
             {
-                toggle = Some(Panel::Worlds);
+                toggle = Some(Tab::Worlds);
             }
             let Some(v) = self.views.get_mut(self.active) else {
                 return;
@@ -441,16 +491,15 @@ impl MudApp {
             }
             ui.separator();
             for (p, icon, tip) in [
-                (Panel::Settings, "⚙", "Welt-Einstellungen"),
-                (Panel::Triggers, "⚡", "Trigger"),
-                (Panel::Aliases, "⌨", "Aliase"),
-                (Panel::Timers, "⏱", "Timer"),
-                (Panel::Variables, "📋", "Variablen"),
-                (Panel::Keypad, "🔢", "Ziffernblock"),
-                (Panel::Plugins, "📦", "Plugins"),
-                (Panel::Map, "🗺", "Karte"),
+                (Tab::Settings, "⚙", "Welt-Einstellungen"),
+                (Tab::Triggers, "⚡", "Trigger"),
+                (Tab::Aliases, "⌨", "Aliase"),
+                (Tab::Timers, "⏱", "Timer"),
+                (Tab::Variables, "📋", "Variablen"),
+                (Tab::Keypad, "🔢", "Ziffernblock"),
+                (Tab::Plugins, "📦", "Plugins"),
             ] {
-                if ui.selectable_label(is_open(p), big(icon)).on_hover_text(tip).clicked() {
+                if ui.selectable_label(is_open(&p), big(icon)).on_hover_text(tip).clicked() {
                     toggle = Some(p);
                 }
             }
@@ -467,11 +516,11 @@ impl MudApp {
                 v.session.set_logging(!logging);
             }
             if ui
-                .selectable_label(is_open(Panel::Gmcp), big("📡"))
+                .selectable_label(is_open(&Tab::Gmcp), big("📡"))
                 .on_hover_text("GMCP/MSDP-Daten")
                 .clicked()
             {
-                toggle = Some(Panel::Gmcp);
+                toggle = Some(Tab::Gmcp);
             }
             if ui.button(big("🗑")).on_hover_text("Ausgabe leeren").clicked() {
                 v.session.clear_output();
@@ -496,14 +545,14 @@ impl MudApp {
                 .on_hover_text("Eigene Knöpfe bearbeiten")
                 .clicked()
             {
-                toggle = Some(Panel::Buttons);
+                toggle = Some(Tab::Buttons);
             }
         });
         if save {
             self.save_active();
         }
         if let Some(p) = toggle {
-            self.toggle_panel(p);
+            self.toggle_tab(p);
         }
     }
 
@@ -549,7 +598,7 @@ impl MudApp {
                     updater::open_url(&info.page_url);
                 }
                 if ui.button("Was ist neu?").clicked() {
-                    self.open_panel(Panel::About);
+                    self.open_tab(Tab::About);
                 }
                 if ui.button("Später").clicked() {
                     self.update_dismissed = true;
@@ -783,7 +832,7 @@ impl MudApp {
                 WmAction::Open(p, connect) => {
                     let w = World::load(&p)?;
                     self.open_world(w, Some(p), connect);
-                    self.close_panel(Panel::Worlds);
+                    self.close_tab(Tab::Worlds);
                 }
                 WmAction::Edit(p) => {
                     if self.view_index(&p).is_none() {
@@ -792,7 +841,7 @@ impl MudApp {
                     }
                     let i = self.view_index(&p).unwrap();
                     self.active = i;
-                    self.open_panel(Panel::Settings);
+                    self.open_tab(Tab::Settings);
                 }
                 WmAction::Create => {
                     let w = World {
@@ -807,7 +856,7 @@ impl MudApp {
                     self.wm.new_name.clear();
                     self.wm.new_host.clear();
                     self.open_world(w, Some(p), false);
-                    self.close_panel(Panel::Worlds);
+                    self.close_tab(Tab::Worlds);
                 }
                 WmAction::Duplicate(p) => {
                     let mut w = World::load(&p)?;
@@ -880,54 +929,12 @@ impl MudApp {
         }
         self.wm.worlds = None;
     }
-    // ------------------------------------------------------------ Andockbereich
+    // ------------------------------------------------------------ Fensterinhalte
 
-    fn dock(&mut self, ctx: &egui::Context) {
-        if self.panels.is_empty() {
-            return;
-        }
-        let current = match self.panel {
-            Some(p) if self.panels.contains(&p) => p,
-            _ => self.panels[0],
-        };
-        self.panel = Some(current);
-        let panels = self.panels.clone();
-        let mut activate = None;
-        let mut close = None;
-        egui::SidePanel::right("dock")
-            .resizable(true)
-            .default_width(520.0)
-            .min_width(320.0)
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for p in &panels {
-                        if ui.selectable_label(*p == current, p.title()).clicked() {
-                            activate = Some(*p);
-                        }
-                        if ui.small_button("✖").on_hover_text("Schließen").clicked() {
-                            close = Some(*p);
-                        }
-                        ui.add_space(6.0);
-                    }
-                });
-                ui.separator();
-                ScrollArea::vertical()
-                    .id_salt(("dock", current.title()))
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| self.panel_ui(ui, current));
-            });
-        if let Some(p) = activate {
-            self.panel = Some(p);
-        }
-        if let Some(p) = close {
-            self.close_panel(p);
-        }
-    }
-
-    fn panel_ui(&mut self, ui: &mut egui::Ui, p: Panel) {
+    fn panel_ui(&mut self, ui: &mut egui::Ui, p: Tab) {
         match p {
-            Panel::Worlds => return self.world_manager_ui(ui),
-            Panel::About => return self.about_ui(ui),
+            Tab::Worlds => return self.world_manager_ui(ui),
+            Tab::About => return self.about_ui(ui),
             _ => {}
         }
         let active = self.active;
@@ -938,7 +945,7 @@ impl MudApp {
         ui.label(RichText::new(format!("Welt: {}", v.session.world.name)).weak());
         let mut save = false;
         match p {
-            Panel::Settings => {
+            Tab::Settings => {
                 if ui_editors::world_settings(ui, &mut v.session) {
                     v.session.reload_script();
                 }
@@ -947,76 +954,14 @@ impl MudApp {
                     save = true;
                 }
             }
-            Panel::Triggers => ui_editors::triggers(ui, &mut v.session, &mut v.trg),
-            Panel::Aliases => ui_editors::aliases(ui, &mut v.session, &mut v.ali),
-            Panel::Timers => ui_editors::timers(ui, &mut v.session, &mut v.tim),
-            Panel::Variables => ui_editors::variables(ui, &mut v.session, &mut v.vars),
-            Panel::Keypad => ui_editors::keypad(ui, &mut v.session),
-            Panel::Buttons => ui_editors::buttons(ui, &mut v.session, &mut v.button_sel),
-            Panel::Plugins => ui_editors::plugins(ui, &mut v.session, &mut self.plugin_ui),
-            Panel::Map => {
-                let w = &mut v.session.world;
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut w.map_capture, "Karte aus der Ausgabe holen");
-                    ui.checkbox(&mut w.map_fit, "An Fenster anpassen");
-                    ui.add_enabled(
-                        !w.map_fit,
-                        egui::Slider::new(&mut w.map_font_size, 8.0..=40.0).text("Größe"),
-                    );
-                });
-                if !w.map_capture {
-                    ui.label(
-                        RichText::new(
-                            "Ist das eingeschaltet, wird eine ASCII-Karte am Zeilenanfang (Rahmen +----+ und Zeilen |....|) \
-                             aus der Ausgabe herausgeschnitten und hier angezeigt.",
-                        )
-                        .weak(),
-                    );
-                }
-                // Karte wächst mit der Erfahrung – Schriftgröße so wählen, dass sie ganz hineinpasst
-                let cols = v
-                    .session
-                    .map
-                    .iter()
-                    .map(|l| l.plain().chars().count())
-                    .max()
-                    .unwrap_or(1)
-                    .max(1) as f32;
-                let rows = v.session.map.len().max(1) as f32;
-                let size = if w.map_fit {
-                    let probe = FontId::monospace(20.0);
-                    let (cw, rh) = ui.fonts(|f| (f.glyph_width(&probe, 'M') / 20.0, f.row_height(&probe) / 20.0));
-                    let avail = ui.available_size() - egui::vec2(24.0, 24.0);
-                    let by_w = avail.x / (cols * cw);
-                    let by_h = (avail.y.max(200.0)) / (rows * rh);
-                    by_w.min(by_h).clamp(6.0, 60.0)
-                } else {
-                    w.map_font_size
-                };
-                let font = FontId::monospace(size);
-                if !v.session.map.is_empty() {
-                    ui.label(
-                        RichText::new(format!("{} × {} Zeichen", cols as usize, rows as usize))
-                            .weak()
-                            .small(),
-                    );
-                }
-                if v.session.map.is_empty() {
-                    ui.label(RichText::new("Noch keine Karte empfangen.").weak());
-                } else {
-                    let bg = Color32::from_rgb(DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2);
-                    egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        for line in &v.session.map {
-                            let mut job = LayoutJob::default();
-                            job.wrap.max_width = f32::INFINITY;
-                            line_job(line, &font, &mut job);
-                            ui.add(egui::Label::new(job).extend());
-                        }
-                    });
-                }
-            }
-            Panel::Gmcp => {
+            Tab::Triggers => ui_editors::triggers(ui, &mut v.session, &mut v.trg),
+            Tab::Aliases => ui_editors::aliases(ui, &mut v.session, &mut v.ali),
+            Tab::Timers => ui_editors::timers(ui, &mut v.session, &mut v.tim),
+            Tab::Variables => ui_editors::variables(ui, &mut v.session, &mut v.vars),
+            Tab::Keypad => ui_editors::keypad(ui, &mut v.session),
+            Tab::Buttons => ui_editors::buttons(ui, &mut v.session, &mut v.button_sel),
+            Tab::Plugins => ui_editors::plugins(ui, &mut v.session, &mut self.plugin_ui),
+            Tab::Gmcp => {
                 ui.heading("GMCP");
                 if let Some(map) = v.session.gmcp_tree.as_object() {
                     if map.is_empty() {
@@ -1035,31 +980,220 @@ impl MudApp {
                     ui_editors::json_tree(ui, k, val, &format!("m.{k}"));
                 }
             }
-            Panel::Worlds | Panel::About => {}
+            Tab::Worlds | Tab::About | Tab::Output | Tab::Plugin(_) => {}
         }
         if save {
             self.save_active();
         }
     }
+
+    /// Die Spielausgabe der gewählten Welt.
+    fn output_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(v) = self.views.get_mut(self.active) else {
+            let mut open_wm = false;
+            ui.centered_and_justified(|ui| {
+                if ui
+                    .button(RichText::new("🌍 Welt öffnen oder anlegen").size(20.0))
+                    .clicked()
+                {
+                    open_wm = true;
+                }
+            });
+            if open_wm {
+                self.open_tab(Tab::Worlds);
+            }
+            return;
+        };
+        let font = FontId::monospace(v.session.world.font_size);
+        let bg = Color32::from_rgb(DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2);
+        egui::Frame::new().fill(bg).inner_margin(6.0).show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            let (row_h, char_w) = ui.fonts(|f| (f.row_height(&font), f.glyph_width(&font, 'M')));
+            let avail = ui.available_size();
+            let cols = (avail.x / char_w.max(1.0)).floor().clamp(20.0, 500.0) as u16;
+            let rows = (avail.y / row_h.max(1.0)).floor().clamp(5.0, 300.0) as u16;
+            v.session.set_term_size(cols, rows);
+
+            let s = &v.session;
+            let has_current = !s.current.is_empty();
+            let total = s.lines.len() + usize::from(has_current);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ScrollArea::both()
+                .id_salt(("output", self.active))
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show_rows(ui, row_h, total, |ui, range| {
+                    for i in range {
+                        let line = if i < s.lines.len() { &s.lines[i] } else { &s.current };
+                        let mut job = LayoutJob::default();
+                        job.wrap.max_width = f32::INFINITY;
+                        if line.spans.is_empty() {
+                            job.append(
+                                " ",
+                                0.0,
+                                TextFormat {
+                                    font_id: font.clone(),
+                                    ..Default::default()
+                                },
+                            );
+                        } else {
+                            line_job(line, &font, &mut job);
+                        }
+                        ui.add(egui::Label::new(job).extend());
+                    }
+                });
+        });
+    }
+
+    /// Inhalt eines Plugin-Fensters: Text, Überschriften, Balken, Wertepaare.
+    fn plugin_window_ui(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(v) = self.views.get(self.active) else {
+            ui.label(RichText::new("Keine Welt geöffnet.").weak());
+            return;
+        };
+        let Some(w) = v.session.windows.get(id) else {
+            ui.label(RichText::new("Dieses Fenster gibt es in der aktuellen Welt nicht (Plugin aus?).").weak());
+            return;
+        };
+        crate::ui_widgets::plugin_window(ui, w);
+    }
 }
 
-fn line_job(line: &Line, font: &FontId, job: &mut LayoutJob) {
-    for span in &line.spans {
-        let (fg, bg) = resolve(&span.style, DEFAULT_FG, DEFAULT_BG);
-        let mut fmt = TextFormat {
-            font_id: font.clone(),
-            color: Color32::from_rgb(fg.0, fg.1, fg.2),
-            italics: span.style.italic,
-            ..Default::default()
-        };
-        if let Some(bg) = bg {
-            fmt.background = Color32::from_rgb(bg.0, bg.1, bg.2);
+/// Verbindet egui_dock mit den Fensterinhalten der App.
+struct Viewer<'a> {
+    app: &'a mut MudApp,
+}
+
+impl egui_dock::TabViewer for Viewer<'_> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        match tab {
+            Tab::Plugin(id) => self
+                .app
+                .views
+                .get(self.app.active)
+                .and_then(|v| v.session.windows.get(id.as_str()))
+                .map(|w| w.title.clone())
+                .unwrap_or_else(|| id.clone())
+                .into(),
+            Tab::Output => match self.app.views.get(self.app.active) {
+                Some(v) => format!("📜 {}", v.session.world.name).into(),
+                None => tab.title().into(),
+            },
+            t => t.title().into(),
         }
-        if span.style.underline {
-            fmt.underline = Stroke::new(1.0_f32, fmt.color);
-        }
-        job.append(&span.text, 0.0, fmt);
     }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        match tab {
+            Tab::Output => self.app.output_ui(ui),
+            Tab::Plugin(id) => {
+                let id = id.clone();
+                self.app.plugin_window_ui(ui, &id);
+            }
+            t => {
+                let t = t.clone();
+                egui::Frame::new()
+                    .inner_margin(8.0)
+                    .show(ui, |ui| self.app.panel_ui(ui, t));
+            }
+        }
+    }
+
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(("tab", format!("{tab:?}")))
+    }
+
+    fn closeable(&mut self, tab: &mut Tab) -> bool {
+        *tab != Tab::Output
+    }
+
+    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+        match tab {
+            Tab::Output => [false, false],
+            _ => [false, true],
+        }
+    }
+
+    fn clear_background(&self, tab: &Tab) -> bool {
+        *tab != Tab::Output
+    }
+}
+
+fn layout_path() -> PathBuf {
+    config_dir().join("layout.json")
+}
+
+fn default_layout() -> DockState<Tab> {
+    DockState::new(vec![Tab::Output])
+}
+
+fn load_layout() -> DockState<Tab> {
+    std::fs::read_to_string(layout_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<DockState<Tab>>(&s).ok())
+        .filter(|d| d.find_tab(&Tab::Output).is_some())
+        .unwrap_or_else(default_layout)
+}
+
+fn save_layout(d: &DockState<Tab>) {
+    if let Ok(text) = serde_json::to_string_pretty(d) {
+        let _ = std::fs::create_dir_all(config_dir());
+        let _ = std::fs::write(layout_path(), text);
+    }
+}
+
+/// Akzentfarbe (Rost-Orange wie im Programmsymbol).
+pub const ACCENT: Color32 = Color32::from_rgb(206, 120, 50);
+
+/// Dunkles Design mit abgerundeten Ecken und Akzentfarbe.
+pub fn apply_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = Color32::from_rgb(26, 28, 33);
+    v.window_fill = Color32::from_rgb(32, 34, 40);
+    v.extreme_bg_color = Color32::from_rgb(14, 15, 18);
+    v.faint_bg_color = Color32::from_rgb(36, 38, 45);
+    v.selection.bg_fill = ACCENT.linear_multiply(0.55);
+    v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+    v.hyperlink_color = ACCENT;
+    v.window_corner_radius = egui::CornerRadius::same(8);
+    v.menu_corner_radius = egui::CornerRadius::same(6);
+    for w in [
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = egui::CornerRadius::same(5);
+    }
+    v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(5);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT.linear_multiply(0.8));
+    v.widgets.active.bg_fill = ACCENT.linear_multiply(0.7);
+    style.visuals = v;
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(7.0, 3.0);
+    ctx.set_style(style);
+}
+
+fn dock_style(ctx: &egui::Context) -> egui_dock::Style {
+    let mut st = egui_dock::Style::from_egui(&ctx.style());
+    st.tab_bar.bg_fill = Color32::from_rgb(20, 21, 25);
+    st.tab_bar.height = 26.0;
+    st.tab.active.bg_fill = Color32::from_rgb(40, 43, 50);
+    st.tab.active.text_color = Color32::WHITE;
+    st.tab.focused.bg_fill = Color32::from_rgb(48, 44, 40);
+    st.tab.focused.text_color = ACCENT;
+    st.tab.inactive.bg_fill = Color32::from_rgb(26, 28, 33);
+    st.tab.hovered.bg_fill = Color32::from_rgb(44, 46, 54);
+    st.tab.tab_body.bg_fill = Color32::from_rgb(28, 30, 35);
+    st.separator.color_idle = Color32::from_rgb(45, 47, 55);
+    st.separator.color_hovered = ACCENT.linear_multiply(0.7);
+    st.separator.color_dragged = ACCENT;
+    st.overlay.selection_color = ACCENT.linear_multiply(0.35);
+    st.main_surface_border_stroke = Stroke::NONE;
+    st
 }
 
 fn state_color(s: ConnState) -> Color32 {
@@ -1118,14 +1252,15 @@ impl eframe::App for MudApp {
             }
         }
 
-        // Kartenfenster beim ersten Empfang einer Karte automatisch öffnen
-        if let Some(v) = self.views.get_mut(self.active) {
-            if v.session.map_version > 0 && v.map_seen == 0 {
-                v.map_seen = v.session.map_version;
-                if !self.panels.contains(&Panel::Map) {
-                    self.panels.push(Panel::Map);
-                    self.panel.get_or_insert(Panel::Map);
-                }
+        // Plugins möchten Fenster anzeigen (WindowShow)
+        let requests: Vec<String> = self
+            .views
+            .get_mut(self.active)
+            .map(|v| std::mem::take(&mut v.session.window_requests))
+            .unwrap_or_default();
+        for id in requests {
+            if !self.is_open(&Tab::Plugin(id.clone())) {
+                self.open_tab(Tab::Plugin(id));
             }
         }
 
@@ -1256,72 +1391,26 @@ impl eframe::App for MudApp {
             });
         }
 
-        // Angedockte Fenster rechts
-        self.dock(ctx);
-
-        if self.views.is_empty() {
-            let mut open_wm = false;
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.centered_and_justified(|ui| {
-                    if ui
-                        .button(RichText::new("🌍 Welt öffnen oder anlegen").size(20.0))
-                        .clicked()
-                    {
-                        open_wm = true;
-                    }
-                });
-            });
-            if open_wm {
-                self.open_panel(Panel::Worlds);
-            }
-            return;
+        // Frei anordnbarer Fensterbereich (Ausgabe, Editoren, Plugin-Fenster)
+        let mut dock = self.dock.take().unwrap_or_else(default_layout);
+        let style = dock_style(ctx);
+        DockArea::new(&mut dock)
+            .style(style)
+            .show_leaf_collapse_buttons(false)
+            .show_leaf_close_all_buttons(false)
+            .show(ctx, &mut Viewer { app: self });
+        // Die Ausgabe darf nie ganz verschwinden
+        if dock.find_tab(&Tab::Output).is_none() {
+            dock.push_to_first_leaf(Tab::Output);
         }
-        let v = &mut self.views[self.active];
-        let font = FontId::monospace(v.session.world.font_size);
-        // ---------------------------------------------------- Ausgabe
-        let bg = Color32::from_rgb(DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2);
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(bg).inner_margin(4.0))
-            .show(ctx, |ui| {
-                let (row_h, char_w) = ui.fonts(|f| (f.row_height(&font), f.glyph_width(&font, 'M')));
-                let avail = ui.available_size();
-                let cols = (avail.x / char_w.max(1.0)).floor().clamp(20.0, 500.0) as u16;
-                let rows = (avail.y / row_h.max(1.0)).floor().clamp(5.0, 300.0) as u16;
-                v.session.set_term_size(cols, rows);
-
-                let s = &v.session;
-                let has_current = !s.current.is_empty();
-                let total = s.lines.len() + usize::from(has_current);
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(true)
-                    .show_rows(ui, row_h, total, |ui, range| {
-                        for i in range {
-                            let line = if i < s.lines.len() { &s.lines[i] } else { &s.current };
-                            let mut job = LayoutJob::default();
-                            job.wrap.max_width = f32::INFINITY;
-                            if line.spans.is_empty() {
-                                job.append(
-                                    " ",
-                                    0.0,
-                                    TextFormat {
-                                        font_id: font.clone(),
-                                        ..Default::default()
-                                    },
-                                );
-                            } else {
-                                line_job(line, &font, &mut job);
-                            }
-                            ui.add(egui::Label::new(job).extend());
-                        }
-                    });
-            });
+        self.dock = Some(dock);
 
         // Hat nichts den Fokus (z. B. nach Klick in die Ausgabe), bekommt ihn die Eingabezeile zurück
-        if ctx.memory(|m| m.focused().is_none()) {
-            v.focus_input = true;
-            ctx.request_repaint();
+        if let Some(v) = self.views.get_mut(self.active) {
+            if ctx.memory(|m| m.focused().is_none()) {
+                v.focus_input = true;
+                ctx.request_repaint();
+            }
         }
     }
 

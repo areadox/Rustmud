@@ -494,17 +494,6 @@ pub fn world_settings(ui: &mut Ui, s: &mut Session) -> bool {
             ui.end_row();
         });
         ui.separator();
-        ui.heading("Karte");
-        Grid::new("map").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label("");
-            ui.checkbox(&mut w.map_capture, "ASCII-Karte in eigenes Fenster (🗺) verschieben");
-            ui.end_row();
-            ui.label("Max. Kartenbreite");
-            ui.add(DragValue::new(&mut w.map_max_width).range(5..=200))
-                .on_hover_text("Breitere Rahmen gelten als Tabelle und bleiben in der Ausgabe");
-            ui.end_row();
-        });
-        ui.separator();
         ui.heading("Skript & Log");
         Grid::new("script").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label("Lua-Datei");
@@ -798,6 +787,9 @@ pub fn plugins(ui: &mut Ui, s: &mut Session, st: &mut PluginUi) {
                 if !m.author.is_empty() {
                     ui.label(RichText::new(format!("von {}", m.author)).weak());
                 }
+                if pl::is_bundled(&m.id) {
+                    ui.label(RichText::new("mitgeliefert").small().color(crate::app::ACCENT));
+                }
             });
             if !m.description.is_empty() {
                 ui.label(&m.description);
@@ -836,6 +828,25 @@ pub fn plugins(ui: &mut Ui, s: &mut Session, st: &mut PluginUi) {
             });
         });
     }
+    let removed: Vec<&str> = pl::BUNDLED
+        .iter()
+        .map(|(id, _, _)| *id)
+        .filter(|id| !list.iter().any(|m| m.id == *id))
+        .collect();
+    if !removed.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Gelöschte mitgelieferte Plugins:").weak());
+            for id in removed {
+                if ui.small_button(format!("↺ {id} wiederherstellen")).clicked() {
+                    st.message = match pl::restore_bundled(id) {
+                        Ok(()) => format!("„{id}“ wiederhergestellt."),
+                        Err(e) => format!("Fehler: {e}"),
+                    };
+                    refresh = true;
+                }
+            }
+        });
+    }
     for e in &errors {
         ui.label(RichText::new(format!("Defektes Plugin: {e}")).color(egui::Color32::LIGHT_RED));
     }
@@ -848,10 +859,14 @@ pub fn plugins(ui: &mut Ui, s: &mut Session, st: &mut PluginUi) {
         for (f, d) in [
             ("OnPluginInstall()", "beim Laden"),
             ("OnPluginConnect() / OnPluginDisconnect()", "Verbindung"),
-            ("OnPluginLineReceived(zeile)", "jede Zeile; false = ausblenden"),
+            (
+                "OnPluginLineReceived(zeile, ansi)",
+                "jede Zeile; false = ausblenden, Text = ersetzen",
+            ),
             ("OnPluginCommand(befehl)", "jeder Befehl; false = nicht senden"),
             ("OnPluginGMCP(paket, json) / OnPluginMSDP(var)", "Protokolldaten"),
             ("OnPluginDisable()", "beim Deaktivieren"),
+            ("OnPluginTick()", "etwa zehnmal pro Sekunde"),
         ] {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(f).monospace());
@@ -859,6 +874,12 @@ pub fn plugins(ui: &mut Ui, s: &mut Session, st: &mut PluginUi) {
             });
         }
         ui.label("Zusätzlich: GetPluginID(), GetPluginName(), GetPluginDirectory().");
+        ui.label(
+            "Eigene Fenster: WindowCreate(id, titel), WindowClear, WindowAddLine (mit ANSI-Farben), \
+             WindowHeading, WindowGauge(id, name, wert, max, farbe), WindowPair, WindowSeparator, \
+             WindowShow, WindowOption(id, \"fit\", true). Zeilen umschreiben: OnPluginLineReceived \
+             darf einen neuen Text zurückgeben; AnsiSub/AnsiStrip/AnsiLen helfen dabei.",
+        );
     });
     if refresh {
         st.cache = None;

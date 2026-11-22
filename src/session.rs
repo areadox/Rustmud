@@ -6,12 +6,12 @@ use crate::automation::{parse_speedwalk, split_command_stack, substitute, Automa
 use crate::logger::Logger;
 use crate::net::{Connection, NetEvent};
 use crate::plugins::{PluginInstance, PluginMeta};
-use crate::scripting::{error_style, note_style, Action, ScriptEngine};
+use crate::scripting::{error_style, note_style, Action, LineHook, ScriptEngine, WinItem};
 use crate::telnet::{escape_iac, naws_packet, TelnetConfig, TelnetEvent};
 use crate::world::{default_log_dir, worlds_dir, Encoding, SendTo, World};
 use encoding_rs::{Decoder, UTF_8, WINDOWS_1252};
 use serde_json::{Map, Value};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +26,18 @@ pub enum ConnState {
 }
 
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// Ein Fenster, das ein Plugin per Lua befüllt.
+#[derive(Debug, Clone)]
+pub struct PluginWindow {
+    pub title: String,
+    pub items: Vec<WinItem>,
+    /// Inhalt an die Fenstergröße anpassen (z. B. Karte)
+    pub fit: bool,
+    pub font_size: f32,
+    /// Plugin-Kennung, die das Fenster angelegt hat (None = Welt-Skript)
+    pub owner: Option<String>,
+}
 
 pub struct Session {
     pub world: World,
@@ -42,11 +54,10 @@ pub struct Session {
     pub term_size: (u16, u16),
     pub script: ScriptEngine,
     pub plugins: Vec<PluginInstance>,
-    /// Zuletzt erkannte Karte und Zähler (ändert sich bei jeder neuen Karte)
-    pub map: Vec<Line>,
-    pub map_version: u64,
-    map_building: Option<Vec<Line>>,
-    map_width: usize,
+    /// Fenster, die Plugins (oder das Welt-Skript) angelegt haben
+    pub windows: BTreeMap<String, PluginWindow>,
+    /// Fenster, die angezeigt werden sollen (WindowShow) – holt die Oberfläche ab
+    pub window_requests: Vec<String>,
     conn: Option<Connection>,
     decoder: Decoder,
     ansi: AnsiParser,
@@ -91,10 +102,8 @@ impl Session {
             term_size: (80, 24),
             script,
             plugins: Vec::new(),
-            map: Vec::new(),
-            map_version: 0,
-            map_building: None,
-            map_width: 0,
+            windows: BTreeMap::new(),
+            window_requests: Vec::new(),
             conn: None,
             ansi: AnsiParser::new(),
             automation: Automation::default(),
@@ -196,6 +205,21 @@ impl Session {
     // ------------------------------------------------------------ Plugins
 
     #[cfg(test)]
+    pub fn load_plugin_for_test(&mut self, meta: PluginMeta) {
+        self.load_plugin(meta);
+    }
+
+    #[cfg(test)]
+    pub fn feed_for_test(&mut self, data: &[u8]) {
+        self.on_data(data);
+    }
+
+    #[cfg(test)]
+    pub fn feed_prompt_for_test(&mut self) {
+        self.on_telnet(TelnetEvent::Prompt);
+    }
+
+    #[cfg(test)]
     pub fn save_world_vars_for_test(&mut self) {
         self.store_plugin_vars();
     }
@@ -215,6 +239,7 @@ impl Session {
     pub fn reload_plugins(&mut self) {
         self.store_plugin_vars();
         self.plugins.clear();
+        self.windows.retain(|_, w| w.owner.is_none());
         let (installed, _) = crate::plugins::list_plugins();
         for id in self.world.plugins.clone() {
             match installed.iter().find(|m| m.id == id) {
@@ -256,6 +281,7 @@ impl Session {
             self.drain_actions(0);
             self.world.plugins.retain(|p| p != &meta.id);
             self.plugins.retain(|p| p.meta.id != meta.id);
+            self.windows.retain(|_, w| w.owner.as_deref() != Some(meta.id.as_str()));
             self.note(&format!("Plugin deaktiviert: {}", meta.name));
         }
     }
@@ -455,32 +481,53 @@ impl Session {
     /// Wie bei MUSHclient erscheint zuerst die Zeile, danach die Ausgaben der Trigger.
     fn finish_line(&mut self, run_triggers: bool) {
         let mut line = std::mem::take(&mut self.current);
-        if run_triggers && self.world.map_capture && !line.is_prompt {
-            match self.capture_map(line) {
-                Some(rest) => line = rest,
-                None => return,
+        let original = line.plain();
+        // Plugins dürfen Zeilen ausblenden oder umschreiben (OnPluginLineReceived)
+        let mut plugin_omit = false;
+        if run_triggers && !self.plugins.is_empty() {
+            for i in 0..self.plugins.len() {
+                let (plain, ansi) = (line.plain(), line.to_ansi());
+                match self.plugins[i]
+                    .engine
+                    .call_line_hook("OnPluginLineReceived", &plain, &ansi)
+                {
+                    LineHook::Keep => {}
+                    LineHook::Omit => {
+                        plugin_omit = true;
+                        break;
+                    }
+                    LineHook::Replace(text) => {
+                        let prompt = line.is_prompt;
+                        line = Line::from_ansi(&text);
+                        line.is_prompt = prompt;
+                    }
+                }
+            }
+        }
+        // Von Plugins zurückgehaltene Zeilen (EmitLine) erscheinen vor der aktuellen Zeile
+        if !self.plugins.is_empty() {
+            let emits: Vec<Line> = self.plugins.iter().flat_map(|p| p.engine.take_emits()).collect();
+            for l in emits {
+                self.push_output(l);
             }
         }
         let plain = line.plain();
-        let fired = if run_triggers {
+        let fired = if run_triggers && !plugin_omit {
             self.match_triggers(&mut line, &plain)
         } else {
             Vec::new()
         };
-        // Plugins dürfen Zeilen ausblenden (OnPluginLineReceived → false)
-        let plugin_omit =
-            run_triggers && !self.plugins.is_empty() && !self.plugins_allow("OnPluginLineReceived", &plain);
         let omit = plugin_omit || fired.iter().any(|(t, _)| t.omit_from_output);
         let omit_log = fired.iter().any(|(t, _)| t.omit_from_log);
         if !omit_log {
             if let Some(l) = self.logger.as_mut() {
-                l.line(&plain);
+                l.line(&original);
             }
         }
         if !omit {
             self.push_output(line);
         }
-        if plugin_omit || !self.plugins.is_empty() {
+        if !self.plugins.is_empty() {
             self.drain_actions(0);
         }
         for (t, m) in fired {
@@ -492,71 +539,6 @@ impl Session {
                     .call_handler(t.script.trim(), &t.name, &plain, &m.wildcards, &m.named);
             }
             self.drain_actions(0);
-        }
-    }
-
-    // ------------------------------------------------------------ Karte
-
-    /// Breite eines Kartenrahmens „+-----+“ am Zeilenanfang, falls vorhanden.
-    fn map_border_width(chars: &[char], max: usize) -> Option<usize> {
-        if chars.first() != Some(&'+') {
-            return None;
-        }
-        let end = chars[1..].iter().position(|c| *c != '-')? + 1;
-        let w = end + 1;
-        let ok = chars[end] == '+' && w >= 5 && w <= max && (chars.len() == w || chars[w] == ' ');
-        ok.then_some(w)
-    }
-
-    /// Schneidet eine ASCII-Karte (Rahmen „+---+“, Zeilen „|...|“) aus der Ausgabe heraus.
-    /// Liefert den restlichen Text der Zeile oder `None`, wenn nichts übrig bleibt.
-    fn capture_map(&mut self, line: Line) -> Option<Line> {
-        let plain = line.plain();
-        let chars: Vec<char> = plain.chars().collect();
-        let max = self.world.map_max_width.max(5);
-        let Some(mut rows) = self.map_building.take() else {
-            let Some(w) = Self::map_border_width(&chars, max) else {
-                return Some(line); // keine Karte – Zeile unverändert
-            };
-            self.map_width = w;
-            if let Some(l) = self.logger.as_mut() {
-                l.line(&plain);
-            }
-            let (map, rest) = line.split_at_char(w);
-            self.map_building = Some(vec![map]);
-            return Self::text_rest(rest);
-        };
-        let w = self.map_width;
-        let is_row =
-            chars.len() >= w && chars[0] == '|' && chars[w - 1] == '|' && (chars.len() == w || chars[w] == ' ');
-        let is_end = Self::map_border_width(&chars, max) == Some(w);
-        if !is_row && !is_end {
-            // Doch keine Karte mehr – bisherigen Stand übernehmen und Zeile normal behandeln
-            self.publish_map(rows);
-            return self.capture_map(line);
-        }
-        if let Some(l) = self.logger.as_mut() {
-            l.line(&plain);
-        }
-        let (map, rest) = line.split_at_char(w);
-        rows.push(map);
-        if is_end {
-            self.publish_map(rows);
-        } else {
-            self.map_building = Some(rows);
-        }
-        Self::text_rest(rest)
-    }
-
-    fn text_rest(rest: Line) -> Option<Line> {
-        let (_, text) = rest.split_at_char(1); // Leerzeichen zwischen Karte und Text
-        (!text.plain().trim().is_empty()).then_some(text)
-    }
-
-    fn publish_map(&mut self, rows: Vec<Line>) {
-        if rows.len() >= 2 {
-            self.map = rows;
-            self.map_version += 1;
         }
     }
 
@@ -803,15 +785,59 @@ impl Session {
 
     fn drain_actions(&mut self, depth: usize) {
         for _ in 0..1000 {
-            let mut actions = self.script.take_actions();
+            let mut actions: Vec<(Option<String>, Action)> =
+                self.script.take_actions().into_iter().map(|a| (None, a)).collect();
             for p in &self.plugins {
-                actions.extend(p.engine.take_actions());
+                actions.extend(
+                    p.engine
+                        .take_actions()
+                        .into_iter()
+                        .map(|a| (Some(p.meta.id.clone()), a)),
+                );
             }
             if actions.is_empty() {
                 return;
             }
-            for a in actions {
+            for (owner, a) in actions {
                 match a {
+                    Action::WindowCreate(id, title) => {
+                        let w = self.windows.entry(id).or_insert_with(|| PluginWindow {
+                            title: title.clone(),
+                            items: Vec::new(),
+                            fit: false,
+                            font_size: 14.0,
+                            owner: owner.clone(),
+                        });
+                        w.title = title;
+                        w.owner = owner;
+                        self.output_version += 1;
+                    }
+                    Action::WindowClear(id) => {
+                        if let Some(w) = self.windows.get_mut(&id) {
+                            w.items.clear();
+                        }
+                    }
+                    Action::WindowItem(id, item) => {
+                        if let Some(w) = self.windows.get_mut(&id) {
+                            w.items.push(item);
+                            self.output_version += 1;
+                        }
+                    }
+                    Action::WindowShow(id) => {
+                        if self.windows.contains_key(&id) && !self.window_requests.contains(&id) {
+                            self.window_requests.push(id);
+                        }
+                    }
+                    Action::WindowOption(id, key, value) => {
+                        if let Some(w) = self.windows.get_mut(&id) {
+                            match key.as_str() {
+                                "fit" => w.fit = value == "true" || value == "1",
+                                "fontsize" => w.font_size = value.parse().unwrap_or(w.font_size).clamp(6.0, 60.0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    Action::EmitLine(l) => self.push_output(l),
                     Action::Send(t) => {
                         for l in t.lines() {
                             self.send_world(l, true);
@@ -881,6 +907,12 @@ impl Session {
                     .call_handler(t.script.trim(), &t.name, "", &[], &Default::default());
                 self.drain_actions(0);
             }
+        }
+        if !self.plugins.is_empty() {
+            for p in &self.plugins {
+                p.engine.call_if_exists("OnPluginTick", ());
+            }
+            self.drain_actions(0);
         }
         let now = Instant::now();
         let mut ready = Vec::new();
@@ -996,67 +1028,6 @@ mod tests {
         s.save_world_vars_for_test();
         assert_eq!(s.world.plugin_vars["t"]["n"], "1");
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn map_is_cut_out() {
-        let w = World {
-            map_capture: true,
-            ..World::default()
-        };
-        let mut s = Session::new(w, None, Arc::new(|| {}));
-        let before = s.lines.len();
-        let text = "\
-+-------------+ Hier bist Du nun also am Eingang der
-|*************| Dunkelelfenstadt \"Corona\".
-|#(N)-[X]-( )-| In unregelmaessigen Abstaenden
-|******|*o***&| 
-+-------------+ von Wasser.
-   Ausgaenge: Norden und Osten.
-+----+----+
-| Name | LP |
-";
-        s.on_data(text.replace('\n', "\r\n").as_bytes());
-        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
-        assert_eq!(
-            out,
-            vec![
-                "Hier bist Du nun also am Eingang der",
-                "Dunkelelfenstadt \"Corona\".",
-                "In unregelmaessigen Abstaenden",
-                "von Wasser.",
-                "   Ausgaenge: Norden und Osten.",
-                "+----+----+",
-                "| Name | LP |",
-            ]
-        );
-        let map: Vec<String> = s.map.iter().map(|l| l.plain()).collect();
-        assert_eq!(map.len(), 5);
-        assert_eq!(map[2], "|#(N)-[X]-( )-|");
-        assert_eq!(s.map_version, 1);
-    }
-
-    #[test]
-    fn map_size_can_change() {
-        let w = World {
-            map_capture: true,
-            ..World::default()
-        };
-        let mut s = Session::new(w, None, Arc::new(|| {}));
-        s.on_data(b"+-----+ klein\r\n|*(X)*| Raum\r\n+-----+\r\n");
-        assert_eq!(s.map.len(), 3);
-        let big = format!(
-            "+{0}+ Text\r\n{1}+{0}+\r\n",
-            "-".repeat(25),
-            (0..9)
-                .map(|i| format!("|{}| Zeile {i}\r\n", "*".repeat(25)))
-                .collect::<String>()
-        );
-        s.on_data(big.as_bytes());
-        assert_eq!(s.map.len(), 11);
-        assert_eq!(s.map[0].plain().chars().count(), 27);
-        assert_eq!(s.map_version, 2);
-        assert!(s.lines.iter().any(|l| l.plain() == "Zeile 8"));
     }
 
     #[test]

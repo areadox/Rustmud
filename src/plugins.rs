@@ -72,6 +72,87 @@ impl PluginMeta {
     }
 }
 
+/// Plugins, die mit rustmud ausgeliefert werden (Kennung, plugin.toml, main.lua).
+pub const BUNDLED: &[(&str, &str, &str)] = &[
+    (
+        "karte",
+        include_str!("../plugins/karte/plugin.toml"),
+        include_str!("../plugins/karte/main.lua"),
+    ),
+    (
+        "spielstand",
+        include_str!("../plugins/spielstand/plugin.toml"),
+        include_str!("../plugins/spielstand/main.lua"),
+    ),
+    (
+        "lp-warnung",
+        include_str!("../plugins/lp-warnung/plugin.toml"),
+        include_str!("../plugins/lp-warnung/main.lua"),
+    ),
+];
+
+pub fn is_bundled(id: &str) -> bool {
+    BUNDLED.iter().any(|(b, _, _)| *b == id)
+}
+
+/// Datei mit den Kennungen mitgelieferter Plugins, die der Benutzer gelöscht hat.
+fn removed_file() -> PathBuf {
+    plugins_dir().join(".entfernt")
+}
+
+fn removed_bundled() -> Vec<String> {
+    std::fs::read_to_string(removed_file())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Installiert fehlende mitgelieferte Plugins und aktualisiert ältere Versionen.
+/// Vom Benutzer gelöschte mitgelieferte Plugins werden nicht wiederhergestellt.
+pub fn install_bundled() -> Vec<String> {
+    let mut changed = Vec::new();
+    let removed = removed_bundled();
+    for (id, manifest, main) in BUNDLED {
+        if removed.iter().any(|r| r == id) {
+            continue;
+        }
+        let dir = plugins_dir().join(id);
+        let bundled: PluginMeta = match toml::from_str(manifest) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let install = match PluginMeta::load(&dir) {
+            Ok(installed) => crate::updater::is_newer(&bundled.version, &installed.version),
+            Err(_) => true,
+        };
+        if install
+            && std::fs::create_dir_all(&dir).is_ok()
+            && std::fs::write(dir.join(MANIFEST), manifest).is_ok()
+            && std::fs::write(dir.join("main.lua"), main).is_ok()
+        {
+            changed.push(bundled.name.clone());
+        }
+    }
+    changed
+}
+
+/// Mitgeliefertes Plugin auf den Auslieferungszustand zurücksetzen.
+pub fn restore_bundled(id: &str) -> Result<(), String> {
+    let (_, manifest, main) = BUNDLED
+        .iter()
+        .find(|(b, _, _)| *b == id)
+        .ok_or("kein mitgeliefertes Plugin")?;
+    let dir = plugins_dir().join(id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(MANIFEST), manifest).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("main.lua"), main).map_err(|e| e.to_string())?;
+    let rest: Vec<String> = removed_bundled().into_iter().filter(|r| r != id).collect();
+    let _ = std::fs::write(removed_file(), rest.join("\n"));
+    Ok(())
+}
+
 pub fn plugins_dir() -> PathBuf {
     crate::world::config_dir().join("plugins")
 }
@@ -227,7 +308,13 @@ pub fn delete(meta: &PluginMeta) -> Result<(), String> {
     if !meta.dir.starts_with(plugins_dir()) {
         return Err("Plugin liegt nicht im Plugin-Ordner".into());
     }
-    std::fs::remove_dir_all(&meta.dir).map_err(|e| e.to_string())
+    std::fs::remove_dir_all(&meta.dir).map_err(|e| e.to_string())?;
+    if is_bundled(&meta.id) {
+        let mut removed = removed_bundled();
+        removed.push(meta.id.clone());
+        let _ = std::fs::write(removed_file(), removed.join("\n"));
+    }
+    Ok(())
 }
 
 /// Ein für eine Welt geladenes Plugin.
@@ -249,6 +336,164 @@ impl PluginInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::Session;
+    use crate::world::World;
+    use std::sync::Arc;
+
+    /// Lädt ein mitgeliefertes Plugin direkt aus dem Quelltext in eine Testsitzung.
+    fn session_with(ids: &[&str]) -> (Session, Vec<PathBuf>) {
+        let mut s = Session::new(World::default(), None, Arc::new(|| {}));
+        let mut dirs = Vec::new();
+        for id in ids {
+            let (_, manifest, main) = BUNDLED.iter().find(|(b, _, _)| b == id).unwrap();
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("rustmud-bundled-{}-{n}-{id}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("main.lua"), main).unwrap();
+            let mut meta: PluginMeta = toml::from_str(manifest).unwrap();
+            meta.dir = dir.clone();
+            s.world.plugins.push(meta.id.clone());
+            s.load_plugin_for_test(meta);
+            dirs.push(dir);
+        }
+        (s, dirs)
+    }
+
+    fn feed(s: &mut Session, text: &str) {
+        s.feed_for_test(text.replace('\n', "\r\n").as_bytes());
+    }
+
+    fn window_lines(s: &Session, id: &str) -> Vec<String> {
+        let all: Vec<String> = s.lines.iter().map(|l| l.plain()).collect();
+        s.windows
+            .get(id)
+            .unwrap_or_else(|| panic!("Fenster {id} fehlt: {all:?}"))
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::scripting::WinItem::Line(l) => Some(l.plain()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const ROOM: &str = "\
++-------------+ Hier bist Du nun also am Eingang der
+|*************| Dunkelelfenstadt \"Corona\".
+|#(N)-[X]-( )-| In unregelmaessigen Abstaenden
+|******|*o***&| 
++-------------+ von Wasser.
+   Ausgaenge: Norden und Osten.
++----+----+
+";
+
+    #[test]
+    fn karte_plugin_cuts_map() {
+        let (mut s, dirs) = session_with(&["karte"]);
+        let before = s.lines.len();
+        feed(&mut s, ROOM);
+        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(
+            out,
+            vec![
+                "Hier bist Du nun also am Eingang der",
+                "Dunkelelfenstadt \"Corona\".",
+                "In unregelmaessigen Abstaenden",
+                "von Wasser.",
+                "   Ausgaenge: Norden und Osten.",
+                "+----+----+",
+            ]
+        );
+        let map = window_lines(&s, "karte");
+        assert_eq!(map.len(), 5);
+        assert_eq!(map[2], "|#(N)-[X]-( )-|");
+        assert!(s.window_requests.contains(&"karte".to_string()));
+        // größere Karte
+        let big = format!(
+            "+{0}+ Text\n{1}+{0}+\n",
+            "-".repeat(25),
+            (0..9)
+                .map(|i| format!("|{}| Zeile {i}\n", "*".repeat(25)))
+                .collect::<String>()
+        );
+        feed(&mut s, &big);
+        assert_eq!(window_lines(&s, "karte").len(), 11);
+        for d in dirs {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    const SCORE: &str = "\
++-------------------------------------------------------------------------+
+|        Dunkelelfenbengel Gast1, der unerfahrene Avalon-Besucher         |
++-------------------------------------------------------------------------+
+|  Staerke.........:   1   Ausdauer........:   1   Geschicklichkeit:   1  |
+|  Intelligenz.....:   1   Weisheit........:   1   Aura............:   1  |
++-------------------------------------------------------------------------+
+|                             0%       25%        50%       75%     100%  |
+|  Trefferpunkte:   54 (  54) ##########################################  |
+|  Manapunkte:    2500 (9999) ###########                                 |
+|  Tragkraft             92%  #######################################     |
++-------------------------------------+-----------------------------------+
+|  Erfahrungspunkte:               0  |  Flucht bei:          (25 TP) an  |
++-----------------------------------------------------+-------------------+
+|  Alter:  20 Minuten 20 Sekunden                     |         Stufe S1  |
++-----------------------------------------------------+-------------------+
+Du hast ausreichend gegessen.
+";
+
+    #[test]
+    fn spielstand_plugin_parses_score() {
+        let (mut s, dirs) = session_with(&["karte", "spielstand"]);
+        let before = s.lines.len();
+        feed(&mut s, SCORE);
+        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(out, vec!["Du hast ausreichend gegessen."]);
+        let items = &s.windows["spielstand"].items;
+        use crate::scripting::WinItem::*;
+        assert!(items
+            .iter()
+            .any(|i| matches!(i, Heading(h) if h.starts_with("Dunkelelfenbengel Gast1"))));
+        assert!(items.iter().any(
+            |i| matches!(i, Gauge { label, value, max, .. } if label == "Trefferpunkte" && *value == 54.0 && *max == 54.0)
+        ));
+        assert!(items
+            .iter()
+            .any(|i| matches!(i, Gauge { label, value, .. } if label == "Tragkraft" && *value == 92.0)));
+        assert!(items
+            .iter()
+            .any(|i| matches!(i, Pair(k, v) if k == "Geschicklichkeit" && v == "1")));
+        assert!(items
+            .iter()
+            .any(|i| matches!(i, Pair(k, v) if k == "Flucht bei" && v == "(25 TP) an")));
+        assert!(items
+            .iter()
+            .any(|i| matches!(i, Pair(k, v) if k == "Stufe" && v == "S1")));
+        // andere Tabellen bleiben in der Ausgabe
+        let before = s.lines.len();
+        feed(
+            &mut s,
+            "+------------------------------+\n| Wer ist online?              |\n+------------------------------+\n> ",
+        );
+        s.feed_prompt_for_test();
+        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(
+            out,
+            vec![
+                "+------------------------------+",
+                "| Wer ist online?              |",
+                "+------------------------------+",
+                "> "
+            ]
+        );
+        // Karte und Spielstand zusammen: Karte wird trotzdem erkannt
+        feed(&mut s, ROOM);
+        assert_eq!(window_lines(&s, "karte").len(), 5);
+        for d in dirs {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
 
     #[test]
     fn slugs() {

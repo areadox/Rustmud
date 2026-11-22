@@ -7,11 +7,13 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 ## [Unveröffentlicht]
 
 ### Hinzugefügt
-- Andockbereich: alle Fenster erscheinen als Tabs rechts neben der Ausgabe
+- Frei anordnbare Fenster (egui_dock): Ausgabe und alle Fenster per Drag & Drop nebeneinander, untereinander,
+  als Tabs oder frei schwebend; Anordnung wird gespeichert
+- Neues, dunkles Design mit Akzentfarbe
 - Plugin-Schnittstelle (Lua, eigener Zustand pro Plugin, pro Welt aktivierbar) und Plugin-Manager
-- Beispiel-Plugin „LP-Warnung“
-- Kartenfenster: ASCII-Karte neben dem Raumtext wird aus der Ausgabe herausgeschnitten und separat angezeigt,
-  Größe passt sich automatisch an
+- Plugin-Fenster: WindowCreate/WindowAddLine/WindowGauge/WindowPair …, Zeilen umschreiben in
+  OnPluginLineReceived, ANSI-Hilfsfunktionen, OnPluginTick
+- Mitgelieferte Plugins: Karte (ASCII-Karte in eigenes Fenster), Spielstand (Fenster mit Balken), LP-Warnung
 
 ## [0.0.1] – 2026-11-22
 

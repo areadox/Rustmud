@@ -10,8 +10,38 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+/// Inhalt eines Plugin-Fensters.
+#[derive(Debug, Clone)]
+pub enum WinItem {
+    Line(Line),
+    Heading(String),
+    Gauge {
+        label: String,
+        value: f64,
+        max: f64,
+        color: Color,
+    },
+    Pair(String, String),
+    Separator,
+}
+
+/// Ergebnis von OnPluginLineReceived.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineHook {
+    Keep,
+    Omit,
+    Replace(String),
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
+    WindowCreate(String, String),
+    WindowClear(String),
+    WindowItem(String, WinItem),
+    WindowShow(String),
+    WindowOption(String, String, String),
+    /// Zeile in der Ausgabe anzeigen, ohne Log und Trigger (z. B. zurückgehaltene Zeilen)
+    EmitLine(Line),
     Send(String),
     Execute(String),
     Note(Line),
@@ -70,6 +100,20 @@ impl ScriptEngine {
 
     fn push(&self, a: Action) {
         self.shared.borrow_mut().actions.push(a);
+    }
+
+    /// Nimmt nur die zurückgehaltenen Ausgabezeilen (EmitLine) aus der Warteschlange.
+    pub fn take_emits(&self) -> Vec<Line> {
+        let mut sh = self.shared.borrow_mut();
+        let mut out = Vec::new();
+        sh.actions.retain(|a| match a {
+            Action::EmitLine(l) => {
+                out.push(l.clone());
+                false
+            }
+            _ => true,
+        });
+        out
     }
 
     pub fn take_actions(&self) -> Vec<Action> {
@@ -234,6 +278,119 @@ impl ScriptEngine {
         let wn = world_name.to_string();
         func!("WorldName", move |_, ()| Ok(wn.clone()));
 
+        // ---- ANSI-Hilfen
+        func!("AnsiStrip", |_, s: String| Ok(Line::from_ansi(&s).plain()));
+        func!("AnsiLen", |_, s: String| Ok(Line::from_ansi(&s).char_len()));
+        func!("AnsiSub", |_, (s, start, len): (String, i64, Option<i64>)| {
+            // 1-basierte Zeichenposition wie string.sub, Farben bleiben erhalten
+            let line = Line::from_ansi(&s);
+            let total = line.char_len() as i64;
+            let start = if start < 1 { 1 } else { start };
+            let end = match len {
+                Some(l) => (start - 1 + l.max(0)).min(total),
+                None => total,
+            };
+            if start > total || end < start {
+                return Ok(String::new());
+            }
+            let (_, right) = line.split_at_char((start - 1) as usize);
+            let (mid, _) = right.split_at_char((end - start + 1) as usize);
+            Ok(mid.to_ansi())
+        });
+        let s = self.shared.clone();
+        func!("AnsiNote", move |_, text: String| {
+            s.borrow_mut().actions.push(Action::Note(Line::from_ansi(&text)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("EmitLine", move |_, text: String| {
+            s.borrow_mut().actions.push(Action::EmitLine(Line::from_ansi(&text)));
+            Ok(())
+        });
+
+        // ---- Fenster
+        let s = self.shared.clone();
+        func!("WindowCreate", move |_, (id, title): (String, Option<String>)| {
+            let t = title.unwrap_or_else(|| id.clone());
+            s.borrow_mut().actions.push(Action::WindowCreate(id, t));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowClear", move |_, id: String| {
+            s.borrow_mut().actions.push(Action::WindowClear(id));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowShow", move |_, id: String| {
+            s.borrow_mut().actions.push(Action::WindowShow(id));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowAddLine", move |_, (id, text): (String, String)| {
+            s.borrow_mut()
+                .actions
+                .push(Action::WindowItem(id, WinItem::Line(Line::from_ansi(&text))));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowHeading", move |_, (id, text): (String, String)| {
+            s.borrow_mut()
+                .actions
+                .push(Action::WindowItem(id, WinItem::Heading(text)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowSeparator", move |_, id: String| {
+            s.borrow_mut().actions.push(Action::WindowItem(id, WinItem::Separator));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowPair", move |_, (id, k, v): (String, String, LuaValue)| {
+            let v = match v {
+                LuaValue::String(x) => x.to_string_lossy().to_string(),
+                LuaValue::Nil => String::new(),
+                other => other.to_string()?,
+            };
+            s.borrow_mut().actions.push(Action::WindowItem(id, WinItem::Pair(k, v)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("WindowGauge", move |_,
+                                   (id, label, value, max, colour): (
+            String,
+            String,
+            f64,
+            f64,
+            Option<String>
+        )| {
+            let color = colour
+                .as_deref()
+                .and_then(color_from_name)
+                .unwrap_or(Color::Rgb(90, 160, 90));
+            s.borrow_mut().actions.push(Action::WindowItem(
+                id,
+                WinItem::Gauge {
+                    label,
+                    value,
+                    max,
+                    color,
+                },
+            ));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!(
+            "WindowOption",
+            move |_, (id, key, value): (String, String, LuaValue)| {
+                let v = match value {
+                    LuaValue::String(x) => x.to_string_lossy().to_string(),
+                    other => other.to_string()?,
+                };
+                s.borrow_mut().actions.push(Action::WindowOption(id, key, v));
+                Ok(())
+            }
+        );
+
         // print() landet als Notiz in der Ausgabe
         let s = self.shared.clone();
         g.set(
@@ -309,6 +466,26 @@ impl ScriptEngine {
         match self.report(f.call::<LuaValue>(args))? {
             LuaValue::Boolean(b) => Some(b),
             _ => None,
+        }
+    }
+
+    /// OnPluginLineReceived(zeile, ansi): false = ausblenden, Text = Zeile ersetzen.
+    pub fn call_line_hook(&self, name: &str, plain: &str, ansi: &str) -> LineHook {
+        let f = match self.lua.globals().get::<LuaValue>(name) {
+            Ok(LuaValue::Function(f)) => f,
+            _ => return LineHook::Keep,
+        };
+        match self.report(f.call::<LuaValue>((plain.to_string(), ansi.to_string()))) {
+            Some(LuaValue::Boolean(false)) => LineHook::Omit,
+            Some(LuaValue::String(s)) => {
+                let s = s.to_string_lossy().to_string();
+                if s.is_empty() {
+                    LineHook::Omit
+                } else {
+                    LineHook::Replace(s)
+                }
+            }
+            _ => LineHook::Keep,
         }
     }
 
@@ -452,6 +629,41 @@ mod tests {
         e.on_gmcp("Char.Vitals", &serde_json::json!({"hp": 42}), "OnGMCP");
         let a = e.take_actions();
         assert!(matches!(&a[0], Action::Note(l) if l.plain() == "Char.Vitals=42"));
+    }
+
+    #[test]
+    fn ansi_helpers_and_windows() {
+        let e = ScriptEngine::new(BTreeMap::new(), "Test");
+        e.run(
+            r#"
+            local s = "|\27[31m*\27[0m| Text"
+            assert(AnsiStrip(s) == "|*| Text")
+            assert(AnsiLen(s) == 8)
+            assert(AnsiStrip(AnsiSub(s, 1, 3)) == "|*|")
+            assert(AnsiStrip(AnsiSub(s, 5)) == "Text")
+            WindowCreate("w", "Titel")
+            WindowGauge("w", "TP", 10, 20, "red")
+            "#,
+            "t",
+        );
+        let a = e.take_actions();
+        assert!(
+            matches!(&a[0], Action::WindowCreate(id, t) if id == "w" && t == "Titel"),
+            "{a:?}"
+        );
+        assert!(matches!(&a[1], Action::WindowItem(_, WinItem::Gauge { value, .. }) if *value == 10.0));
+    }
+
+    #[test]
+    fn line_hook_results() {
+        let e = ScriptEngine::new(BTreeMap::new(), "Test");
+        e.run(
+            "function F(p, a) if p == 'weg' then return false elseif p == 'neu' then return 'anders' end end",
+            "t",
+        );
+        assert_eq!(e.call_line_hook("F", "weg", "weg"), LineHook::Omit);
+        assert_eq!(e.call_line_hook("F", "neu", "neu"), LineHook::Replace("anders".into()));
+        assert_eq!(e.call_line_hook("F", "x", "x"), LineHook::Keep);
     }
 
     #[test]

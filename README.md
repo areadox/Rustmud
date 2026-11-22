@@ -20,9 +20,10 @@ Läuft unter Windows, Linux und macOS.
 - **Zeichensatz** pro Welt: Latin-1 (Standard, passend für die meisten deutschen MUDs) oder UTF-8
 - **Weltenverwaltung im Programm**: Welten anlegen, öffnen, verbinden, bearbeiten, umbenennen, duplizieren,
   löschen, importieren und exportieren; mehrere Welten gleichzeitig als Tabs
-- **Andockbereich**: Einstellungen, Trigger, Aliase, Plugins usw. öffnen sich als Tabs rechts neben der Ausgabe statt als schwebende Fenster
-- **Kartenfenster**: ASCII-Karten, die der MUD links neben den Raumtext setzt, werden herausgeschnitten und in einem
-  eigenen Fenster angezeigt – in der Ausgabe bleibt nur der Text
+- **Frei anordnbare Fenster**: Ausgabe, Karte, Spielstand, Trigger, Einstellungen usw. lassen sich per Drag & Drop
+  nebeneinander, untereinander, als Tabs oder als frei schwebende Fenster anordnen; die Anordnung wird gespeichert
+- **Mitgelieferte Plugins**: **Karte** (ASCII-Karte neben dem Raumtext in ein eigenes Fenster) und **Spielstand**
+  (Spielstand-Tabelle als übersichtliches Fenster mit Balken), dazu das Beispiel **LP-Warnung**
 - **Plugins**: eigenständige Lua-Erweiterungen mit eigenem Zustand, pro Welt aktivierbar, mit **Plugin-Manager**
 - **Icon-Leiste** für alle wichtigen Funktionen plus **eigene Knöpfe** pro Welt (z. B. „⚔ Angriff“ → `toete @ziel`)
 - **Ziffernblock zum Laufen**, pro Welt frei belegbar (Standard: deutsche Richtungen n, no, o, so, s, sw, w, nw, ob, u)
@@ -85,25 +86,39 @@ cargo test
 | 🌍 | Weltenverwaltung |
 | 🔌 / ⏏ | Verbinden / Trennen |
 | 💾 | Welt speichern |
-| ⚙ ⚡ ⌨ ⏱ 📋 🔢 📦 🗺 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock, Plugins, Karte |
+| ⚙ ⚡ ⌨ ⏱ 📋 🔢 📦 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock, Plugins |
 | 🔄 | Lua-Skript neu laden |
 | 📝 | Log starten/beenden |
 | 📡 | GMCP/MSDP-Daten anzeigen |
 | 🗑 | Ausgabe leeren |
 | ➕ | eigene Knöpfe anlegen und bearbeiten |
 
-Die Fenster öffnen sich im **Andockbereich** rechts neben der Ausgabe. Mehrere geöffnete Fenster erscheinen dort
-als Tabs (✖ schließt einen Tab), die Breite lässt sich mit der Maus ziehen. Ein zweiter Klick auf das Symbol schließt
-den Tab wieder; **Ansicht → Alle angedockten Fenster schließen** räumt den Bereich auf. Die Inhalte beziehen sich immer
-auf die gerade gewählte Welt.
-
 Eigene Knöpfe erscheinen rechts daneben. Sie können einen Befehl senden, wie eine Eingabe ausgeführt werden
 (mit Aliassen, `;` und Speedwalk), Lua-Code ausführen oder eine Notiz ausgeben.
 Die Leiste lässt sich unter **Ansicht → Icon-Leiste** ausblenden.
 
-### Kartenfenster
+### Fenster anordnen
 
-Manche MUDs zeigen links neben der Raumbeschreibung eine kleine ASCII-Karte:
+Die Spielausgabe und alle anderen Fenster (Einstellungen, Trigger, Weltenverwaltung, Plugin-Fenster wie Karte und
+Spielstand …) liegen in einem frei einteilbaren Fensterbereich:
+
+- **Tab an der Titelleiste ziehen** und auf eine der eingeblendeten Zielflächen fallen lassen: links, rechts, oben,
+  unten oder in die Mitte (als weiterer Tab).
+- **Tab aus dem Fensterbereich herausziehen** erzeugt ein frei schwebendes Fenster, das man beliebig verschieben und
+  in der Größe ändern kann.
+- Die **Trennlinien** zwischen den Bereichen lassen sich mit der Maus verschieben.
+- ✖ am Tab schließt ein Fenster, ein Klick auf das Symbol in der Icon-Leiste öffnet oder schließt es ebenfalls.
+- Die Anordnung wird beim Beenden gespeichert (`layout.json` im Konfigurationsordner) und beim nächsten Start
+  wiederhergestellt. **Ansicht → Fensteranordnung zurücksetzen** stellt den Ausgangszustand wieder her.
+
+Die Inhalte der Fenster beziehen sich immer auf die oben gewählte Welt.
+
+### Mitgelieferte Plugins: Karte und Spielstand
+
+rustmud bringt einige Plugins gleich mit. Sie werden beim ersten Start installiert und lassen sich im
+**Plugin-Manager** (📦) **pro Welt per Haken einschalten**.
+
+**🗺 Karte** – Manche MUDs zeigen links neben der Raumbeschreibung eine kleine ASCII-Karte:
 
 ```
 +-------------+ Hier bist Du nun also am Eingang der legendaeren
@@ -112,17 +127,22 @@ Manche MUDs zeigen links neben der Raumbeschreibung eine kleine ASCII-Karte:
 +-------------+ von Wasser.
 ```
 
-Mit **Einstellungen → Karte → „ASCII-Karte in eigenes Fenster verschieben“** (oder dem Haken im Fenster 🗺 **Karte**)
-schneidet rustmud den Kartenblock aus der Ausgabe heraus und zeigt ihn farbig im Kartenfenster. In der Ausgabe bleibt
-nur der Text – auch Trigger und Log sehen nur den Text (das Log enthält zusätzlich die Karte).
+Das Plugin schneidet den Kartenblock heraus, zeigt ihn farbig im Fenster „Karte“ und lässt nur den Text in der
+Ausgabe (auch Trigger sehen nur den Text). Breite und Höhe werden bei jeder Karte neu aus dem Rahmen bestimmt, eine
+mit der Zeit wachsende Karte wird also automatisch erkannt und an das Fenster angepasst. Kästen und Tabellen mit
+Wörtern darin bleiben in der Ausgabe. Befehle: `karte` (Fenster zeigen), `karte breite <zahl>` (maximale
+Kartenbreite, Standard 60).
 
-- Größe und Höhe der Karte werden bei jeder Karte neu aus dem Rahmen bestimmt, eine mit der Zeit wachsende Karte
-  wird also automatisch erkannt.
-- „An Fenster anpassen“ skaliert die Karte so, dass sie immer ganz in das Fenster passt; sonst lässt sich die
-  Größe von Hand einstellen.
-- Breitere Rahmen als die eingestellte **maximale Kartenbreite** (Standard 60) gelten als Tabelle und bleiben in
-  der Ausgabe, ebenso Tabellen mit Spaltentrennern wie `+----+----+`.
-- Beim ersten Empfang einer Karte öffnet sich das Kartenfenster automatisch.
+**📊 Spielstand** – Erkennt die Spielstand-Tabelle (z. B. nach `sp`/`score`) und zeigt sie als Fenster mit farbigen
+Balken für Treffer-, Aktions-, Zauber- und Manapunkte sowie Tragkraft, darunter Eigenschaften und Details. In der
+Ausgabe verschwindet die Tabelle, andere Tabellen bleiben unverändert. Sendet der MUD GMCP-Werte (z. B.
+`Char.Vitals` mit `hp`/`maxhp`), erscheinen sie zusätzlich als „Live“-Balken. Befehle: `spielstand` (Fenster zeigen
+und `sp` senden), `spielstand auto <sek>` (regelmäßig automatisch `sp`, `0` = aus), `spielstand ausgabe an|aus`.
+
+**LP-Warnung** – Beispiel-Plugin: warnt farbig bei niedrigen Lebenspunkten (`lpwarnung <zahl>`).
+
+Mitgelieferte Plugins kann man wie alle anderen bearbeiten (✏ im Plugin-Manager). Mit ↺ lassen sie sich auf den
+Auslieferungszustand zurücksetzen; neue Versionen werden bei Programm-Updates automatisch eingespielt.
 
 ### Ziffernblock
 
@@ -231,15 +251,15 @@ Plugins liegen im Konfigurationsordner unter `plugins/<kennung>/`:
 
 ```
 plugins/
-└── lp-warnung/
+└── mein-plugin/
     ├── plugin.toml
     └── main.lua
 ```
 
 ```toml
 # plugin.toml
-id = "lp-warnung"
-name = "LP-Warnung"
+id = "mein-plugin"
+name = "Mein Plugin"
 version = "1.0.0"
 author = "areadox"
 description = "Warnt, wenn die Lebenspunkte unter eine Grenze fallen."
@@ -252,14 +272,36 @@ Plugins können die komplette [Lua-API](#lua-api) nutzen und folgende Callbacks 
 |----------|------|
 | `OnPluginInstall()` | beim Laden des Plugins |
 | `OnPluginConnect()`, `OnPluginDisconnect()` | nach dem Verbinden / Trennen |
-| `OnPluginLineReceived(zeile)` | für jede empfangene Zeile – `return false` blendet sie aus |
+| `OnPluginLineReceived(zeile, ansi)` | für jede Zeile (ohne bzw. mit Farbcodes) – `return false` blendet sie aus, ein zurückgegebener Text ersetzt sie |
 | `OnPluginCommand(befehl)` | für jeden Befehl vor dem Senden – `return false` verhindert das Senden |
 | `OnPluginGMCP(paket, json)`, `OnPluginMSDP(variable)` | bei Protokolldaten (zusätzlich in `gmcp`/`msdp`) |
 | `OnPluginDisable()` | beim Ausschalten |
+| `OnPluginTick()` | etwa zehnmal pro Sekunde |
 
 Zusätzliche Funktionen in Plugins: `GetPluginID()`, `GetPluginName()`, `GetPluginDirectory()`.
-Ein vollständiges Beispiel ist [`beispiele/plugins/lp-warnung`](beispiele/plugins/lp-warnung) – es reagiert auf
-GMCP `Char.Vitals` oder Zeilen wie „LP: 25“ und bringt den eigenen Befehl `lpwarnung <zahl>` mit.
+### Eigene Fenster und Zeilen umschreiben
+
+Plugins können eigene Fenster anlegen, die wie alle anderen frei angeordnet werden:
+
+| Funktion | Beschreibung |
+|----------|--------------|
+| `WindowCreate(id, titel)` | Fenster anlegen (erscheint erst nach `WindowShow`) |
+| `WindowShow(id)` | Fenster öffnen |
+| `WindowClear(id)` | Inhalt leeren |
+| `WindowAddLine(id, text)` | Textzeile, ANSI-Farbcodes erlaubt (dunkler Block in Festbreitenschrift) |
+| `WindowHeading(id, text)` | Überschrift |
+| `WindowGauge(id, name, wert, max, farbe)` | farbiger Balken, Farbe als Name oder `#rrggbb` |
+| `WindowPair(id, name, wert)` | Wertepaar, aufeinanderfolgende Paare werden als Tabelle angezeigt |
+| `WindowSeparator(id)` | Trennlinie |
+| `WindowOption(id, "fit", true)` | Textzeilen an die Fenstergröße anpassen; `"fontsize"` = feste Schriftgröße |
+| `AnsiStrip(text)`, `AnsiLen(text)`, `AnsiSub(text, start, länge)` | Farbcodes entfernen, Länge, Teilstück mit Farben |
+| `AnsiNote(text)` | farbige Notiz in der Ausgabe |
+| `EmitLine(text)` | zurückgehaltene Zeile in der Ausgabe anzeigen (ohne Log/Trigger) |
+
+Die mitgelieferten Plugins in [`plugins/`](plugins) sind vollständige Beispiele:
+[`karte`](plugins/karte/main.lua) schreibt Zeilen um und füllt ein Fenster,
+[`spielstand`](plugins/spielstand/main.lua) hält Tabellen zurück und zeichnet Balken,
+[`lp-warnung`](plugins/lp-warnung/main.lua) reagiert auf GMCP und eigene Befehle.
 
 ## Aufbau
 
@@ -275,7 +317,9 @@ GMCP `Char.Vitals` oder Zeilen wie „LP: 25“ und bringt den eigenen Befehl `l
 | `plugins.rs` | Plugin-Verwaltung (Manifest, Installation, Vorlage) |
 | `keypad.rs` | Ziffernblock-Erkennung (Windows: Fenster-Subclassing) |
 | `updater.rs` | Update-Prüfung und -Installation über GitHub-Releases |
-| `app.rs`, `ui_editors.rs` | Oberfläche, Icon-Leiste, Andockbereich, Weltenverwaltung, Plugin-Manager |
+| `app.rs`, `ui_editors.rs` | Oberfläche, Icon-Leiste, Fensterbereich (egui_dock), Weltenverwaltung, Plugin-Manager |
+| `ui_widgets.rs` | Darstellung der Plugin-Fenster (Text, Balken, Wertepaare) |
+| `plugins/` | mitgelieferte Plugins (werden ins Programm eingebettet) |
 | `installer/rustmud.nsi` | Windows-Installer (NSIS) |
 
 ## Geplant

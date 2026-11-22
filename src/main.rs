@@ -12,6 +12,7 @@ mod scripting;
 mod session;
 mod telnet;
 mod ui_editors;
+mod ui_widgets;
 mod updater;
 mod world;
 
