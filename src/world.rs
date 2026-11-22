@@ -29,12 +29,7 @@ pub enum SendTo {
 }
 
 impl SendTo {
-    pub const ALL: [SendTo; 4] = [
-        SendTo::World,
-        SendTo::Script,
-        SendTo::Output,
-        SendTo::Execute,
-    ];
+    pub const ALL: [SendTo; 4] = [SendTo::World, SendTo::Script, SendTo::Output, SendTo::Execute];
     pub fn label(&self) -> &'static str {
         match self {
             SendTo::World => "MUD",
@@ -207,12 +202,7 @@ impl Default for World {
             mccp: true,
             gmcp: true,
             msdp: true,
-            gmcp_supports: vec![
-                "Core 1".into(),
-                "Char 1".into(),
-                "Room 1".into(),
-                "Comm 1".into(),
-            ],
+            gmcp_supports: vec!["Core 1".into(), "Char 1".into(), "Room 1".into(), "Comm 1".into()],
             connect_text: String::new(),
             script_file: String::new(),
             logging: false,
@@ -261,10 +251,7 @@ impl World {
                 }
             })
             .collect();
-        format!(
-            "{}.toml",
-            if slug.is_empty() { "welt".into() } else { slug }
-        )
+        format!("{}.toml", if slug.is_empty() { "welt".into() } else { slug })
     }
 }
 

@@ -146,10 +146,7 @@ impl MudApp {
                     ui.close_menu();
                 }
                 let has = !self.views.is_empty();
-                if ui
-                    .add_enabled(has, egui::Button::new("Speichern"))
-                    .clicked()
-                {
+                if ui.add_enabled(has, egui::Button::new("Speichern")).clicked() {
                     let v = &mut self.views[self.active];
                     self.status = match v.session.save_world() {
                         Ok(p) => format!("Gespeichert: {}", p.display()),
@@ -158,10 +155,7 @@ impl MudApp {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(has, egui::Button::new("Verbinden"))
-                    .clicked()
-                {
+                if ui.add_enabled(has, egui::Button::new("Verbinden")).clicked() {
                     self.views[self.active].session.connect();
                     ui.close_menu();
                 }
@@ -170,10 +164,7 @@ impl MudApp {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(has, egui::Button::new("Welt schließen"))
-                    .clicked()
-                {
+                if ui.add_enabled(has, egui::Button::new("Welt schließen")).clicked() {
                     let a = self.active;
                     self.close_view(a);
                     ui.close_menu();
@@ -233,11 +224,7 @@ impl MudApp {
                     ui.label("Noch keine Welten gespeichert.");
                 }
                 for (path, name) in worlds {
-                    if ui
-                        .button(&name)
-                        .on_hover_text(path.display().to_string())
-                        .clicked()
-                    {
+                    if ui.button(&name).on_hover_text(path.display().to_string()).clicked() {
                         match World::load(&path) {
                             Ok(w) => chosen = Some((w, Some(path))),
                             Err(e) => self.status = e,
@@ -249,12 +236,9 @@ impl MudApp {
                     chosen = Some((World::default(), None));
                 }
                 ui.label(
-                    RichText::new(format!(
-                        "Welten liegen in {}",
-                        crate::world::worlds_dir().display()
-                    ))
-                    .weak()
-                    .small(),
+                    RichText::new(format!("Welten liegen in {}", crate::world::worlds_dir().display()))
+                        .weak()
+                        .small(),
                 );
             });
         if let Some((w, p)) = chosen {
@@ -317,17 +301,10 @@ impl eframe::App for MudApp {
                             ConnState::Disconnected => Color32::GRAY,
                         };
                         ui.label(RichText::new("●").color(color));
-                        if ui
-                            .selectable_label(i == self.active, &v.session.world.name)
-                            .clicked()
-                        {
+                        if ui.selectable_label(i == self.active, &v.session.world.name).clicked() {
                             self.active = i;
                         }
-                        if ui
-                            .small_button("✖")
-                            .on_hover_text("Welt schließen")
-                            .clicked()
-                        {
+                        if ui.small_button("✖").on_hover_text("Welt schließen").clicked() {
                             close = Some(i);
                         }
                         ui.separator();
@@ -359,11 +336,7 @@ impl eframe::App for MudApp {
                     ui.separator();
                     ui.label("MCCP");
                 }
-                if v.session
-                    .gmcp_tree
-                    .as_object()
-                    .is_some_and(|m| !m.is_empty())
-                {
+                if v.session.gmcp_tree.as_object().is_some_and(|m| !m.is_empty()) {
                     ui.separator();
                     ui.label("GMCP");
                 }
@@ -377,9 +350,8 @@ impl eframe::App for MudApp {
                     ui.separator();
                     ui.label(RichText::new(&self.status).weak());
                 }
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match v.session.state {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    match v.session.state {
                         ConnState::Disconnected => {
                             if ui.button("Verbinden").clicked() {
                                 v.session.connect();
@@ -390,8 +362,8 @@ impl eframe::App for MudApp {
                                 v.session.disconnect();
                             }
                         }
-                    },
-                );
+                    }
+                });
             });
         });
 
@@ -429,19 +401,14 @@ impl eframe::App for MudApp {
                     .id(id)
                     .font(font.clone())
                     .password(v.session.hide_input)
-                    .hint_text(if v.session.hide_input {
-                        "Passwort …"
-                    } else {
-                        ""
-                    })
+                    .hint_text(if v.session.hide_input { "Passwort …" } else { "" })
                     .desired_width(f32::INFINITY)
                     .lock_focus(true),
             );
             if hist_changed {
                 if let Some(mut st) = TextEdit::load_state(ctx, id) {
                     let n = v.input.chars().count();
-                    st.cursor
-                        .set_char_range(Some(CCursorRange::one(CCursor::new(n))));
+                    st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(n))));
                     st.store(ctx, id);
                 }
             }
@@ -470,26 +437,24 @@ impl eframe::App for MudApp {
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.heading("GMCP");
-                    ScrollArea::vertical()
-                        .id_salt("gmcp_scroll")
-                        .show(ui, |ui| {
-                            if let Some(map) = v.session.gmcp_tree.as_object() {
-                                if map.is_empty() {
-                                    ui.label(RichText::new("noch keine Daten").weak());
-                                }
-                                for (k, val) in map {
-                                    ui_editors::json_tree(ui, k, val, &format!("g.{k}"));
-                                }
-                            }
-                            ui.separator();
-                            ui.heading("MSDP");
-                            if v.session.msdp_tree.is_empty() {
+                    ScrollArea::vertical().id_salt("gmcp_scroll").show(ui, |ui| {
+                        if let Some(map) = v.session.gmcp_tree.as_object() {
+                            if map.is_empty() {
                                 ui.label(RichText::new("noch keine Daten").weak());
                             }
-                            for (k, val) in &v.session.msdp_tree {
-                                ui_editors::json_tree(ui, k, val, &format!("m.{k}"));
+                            for (k, val) in map {
+                                ui_editors::json_tree(ui, k, val, &format!("g.{k}"));
                             }
-                        });
+                        }
+                        ui.separator();
+                        ui.heading("MSDP");
+                        if v.session.msdp_tree.is_empty() {
+                            ui.label(RichText::new("noch keine Daten").weak());
+                        }
+                        for (k, val) in &v.session.msdp_tree {
+                            ui_editors::json_tree(ui, k, val, &format!("m.{k}"));
+                        }
+                    });
                 });
         }
 
@@ -498,8 +463,7 @@ impl eframe::App for MudApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(bg).inner_margin(4.0))
             .show(ctx, |ui| {
-                let (row_h, char_w) =
-                    ui.fonts(|f| (f.row_height(&font), f.glyph_width(&font, 'M')));
+                let (row_h, char_w) = ui.fonts(|f| (f.row_height(&font), f.glyph_width(&font, 'M')));
                 let avail = ui.available_size();
                 let cols = (avail.x / char_w.max(1.0)).floor().clamp(20.0, 500.0) as u16;
                 let rows = (avail.y / row_h.max(1.0)).floor().clamp(5.0, 300.0) as u16;
@@ -514,11 +478,7 @@ impl eframe::App for MudApp {
                     .stick_to_bottom(true)
                     .show_rows(ui, row_h, total, |ui, range| {
                         for i in range {
-                            let line = if i < s.lines.len() {
-                                &s.lines[i]
-                            } else {
-                                &s.current
-                            };
+                            let line = if i < s.lines.len() { &s.lines[i] } else { &s.current };
                             let mut job = LayoutJob::default();
                             job.wrap.max_width = f32::INFINITY;
                             if line.spans.is_empty() {
@@ -568,16 +528,12 @@ impl eframe::App for MudApp {
             .id(egui::Id::new(("triggers", self.active)))
             .open(&mut v.show_triggers)
             .default_width(560.0)
-            .show(ctx, |ui| {
-                ui_editors::triggers(ui, &mut v.session, &mut v.trg)
-            });
+            .show(ctx, |ui| ui_editors::triggers(ui, &mut v.session, &mut v.trg));
         egui::Window::new(format!("Aliase – {title}"))
             .id(egui::Id::new(("aliases", self.active)))
             .open(&mut v.show_aliases)
             .default_width(560.0)
-            .show(ctx, |ui| {
-                ui_editors::aliases(ui, &mut v.session, &mut v.ali)
-            });
+            .show(ctx, |ui| ui_editors::aliases(ui, &mut v.session, &mut v.ali));
         egui::Window::new(format!("Timer – {title}"))
             .id(egui::Id::new(("timers", self.active)))
             .open(&mut v.show_timers)
@@ -587,9 +543,7 @@ impl eframe::App for MudApp {
             .id(egui::Id::new(("vars", self.active)))
             .open(&mut v.show_vars)
             .default_width(420.0)
-            .show(ctx, |ui| {
-                ui_editors::variables(ui, &mut v.session, &mut v.vars)
-            });
+            .show(ctx, |ui| ui_editors::variables(ui, &mut v.session, &mut v.vars));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

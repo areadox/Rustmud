@@ -1,7 +1,16 @@
 # rustmud
 
-Ein MUD-Client in Rust nach dem Vorbild von [MUSHclient](https://www.gammon.com.au/mushclient/).
+[![CI](https://github.com/areadox/Rustmud/actions/workflows/ci.yml/badge.svg)](https://github.com/areadox/Rustmud/actions/workflows/ci.yml)
+[![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/areadox/Rustmud?include_prereleases)](https://github.com/areadox/Rustmud/releases)
+
+Ein freier, quelloffener MUD-Client in Rust nach dem Vorbild von [MUSHclient](https://www.gammon.com.au/mushclient/).
 Oberfläche mit [egui](https://github.com/emilk/egui), Scripting mit Lua 5.4 und eine MUSHclient-ähnliche Lua-API.
+Läuft unter Windows, Linux und macOS.
+
+> **English:** rustmud is a free and open source MUD client written in Rust, inspired by MUSHclient.
+> It supports MCCP, GMCP, MSDP, ANSI colours, triggers, aliases, timers and Lua scripting.
+> The UI and documentation are currently in German; contributions in English are welcome.
 
 ## Funktionen
 
@@ -18,14 +27,19 @@ Oberfläche mit [egui](https://github.com/emilk/egui), Scripting mit Lua 5.4 und
 - GMCP/MSDP-Inspektor als Seitenleiste
 - Befehlshistorie mit ↑/↓, automatisches Verbinden beim Öffnen und automatisches Neuverbinden
 
-## Bauen
+## Download
+
+Fertige Programme für Windows, Linux und macOS gibt es unter [Releases](https://github.com/areadox/Rustmud/releases).
+Archiv entpacken und `rustmud` bzw. `rustmud.exe` starten – eine Installation ist nicht nötig.
+
+## Selbst bauen
 
 ```sh
 cargo build --release
 ```
 
 Die fertige Datei liegt unter `target/release/rustmud` (unter Windows `rustmud.exe`).
-Unter Linux braucht man die üblichen X11/Wayland-Entwicklungspakete für eframe.
+Lua wird mitkompiliert, daher wird ein C-Compiler benötigt (unter Windows die MSVC Build Tools).
 
 Tests ausführen (inklusive eines Durchlaufs gegen einen Fake-MUD auf localhost):
 
@@ -135,6 +149,21 @@ Ein Beispielskript liegt unter [`beispiele/beispiel.lua`](beispiele/beispiel.lua
 - MXP, Plugins und Import von MUSHclient-Welten (`.mcl`)
 - Ziffernblock für Richtungen, Suche in der Ausgabe
 
+Ideen und Fehler gerne als [Issue](https://github.com/areadox/Rustmud/issues) melden.
+
+## Mitmachen
+
+Beiträge sind willkommen! Wie man das Projekt baut, testet und Pull Requests einreicht, steht in
+[CONTRIBUTING.md](CONTRIBUTING.md). Es gilt der [Verhaltenskodex](CODE_OF_CONDUCT.md).
+Sicherheitslücken bitte vertraulich melden, siehe [SECURITY.md](SECURITY.md).
+Änderungen zwischen den Versionen stehen in der [CHANGELOG.md](CHANGELOG.md).
+
 ## Lizenz
 
-MIT
+rustmud steht unter der [MIT-Lizenz](LICENSE) – du darfst es frei benutzen, verändern und weitergeben.
+
+Die verwendeten Bibliotheken (u. a. egui, mlua mit Lua 5.4, regex, flate2) stehen unter MIT-kompatiblen
+Lizenzen (MIT, Apache-2.0, Zlib, BSD u. a.); das wird in der CI mit [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) geprüft.
+
+rustmud ist ein eigenständiges Projekt und steht in keiner Verbindung zu MUSHclient oder dessen Autor Nick Gammon.
+Es wurde kein Code aus MUSHclient übernommen; lediglich Bedienkonzept und Namen der Lua-Funktionen sind angelehnt.

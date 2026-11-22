@@ -22,12 +22,7 @@ pub struct Connection {
 impl Connection {
     /// Startet den Verbindungsaufbau im Hintergrund. `wake` wird nach jedem Ereignis aufgerufen
     /// (z. B. um die Oberfläche neu zu zeichnen).
-    pub fn open(
-        host: String,
-        port: u16,
-        cfg: TelnetConfig,
-        wake: impl Fn() + Send + 'static,
-    ) -> Self {
+    pub fn open(host: String, port: u16, cfg: TelnetConfig, wake: impl Fn() + Send + 'static) -> Self {
         let (tx, rx) = channel();
         let writer: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
         let w2 = writer.clone();
@@ -73,10 +68,7 @@ impl Connection {
                         return;
                     }
                 }
-                let peer = stream
-                    .peer_addr()
-                    .map(|a| a.to_string())
-                    .unwrap_or_default();
+                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
                 if !send(NetEvent::Connected(peer)) {
                     return;
                 }

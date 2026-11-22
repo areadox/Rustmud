@@ -16,7 +16,7 @@ impl Logger {
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let name = format!("{}_{}.log", slug, chrono::Local::now().format("%Y-%m-%d"));
+        let name = format!("{}_{}.log", slug, jiff::Zoned::now().strftime("%Y-%m-%d"));
         let path = dir.join(name);
         let file = OpenOptions::new()
             .create(true)
@@ -29,7 +29,7 @@ impl Logger {
         };
         l.line(&format!(
             "----- Log gestartet {} -----",
-            chrono::Local::now().format("%d.%m.%Y %H:%M:%S")
+            jiff::Zoned::now().strftime("%d.%m.%Y %H:%M:%S")
         ));
         Ok(l)
     }
@@ -47,7 +47,7 @@ impl Drop for Logger {
     fn drop(&mut self) {
         self.line(&format!(
             "----- Log beendet {} -----",
-            chrono::Local::now().format("%d.%m.%Y %H:%M:%S")
+            jiff::Zoned::now().strftime("%d.%m.%Y %H:%M:%S")
         ));
         self.flush();
     }

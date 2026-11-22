@@ -204,10 +204,7 @@ impl Session {
         self.user_disconnect = false;
         self.reconnect_at = None;
         self.state = ConnState::Connecting;
-        self.note(&format!(
-            "Verbinde mit {}:{} …",
-            self.world.host, self.world.port
-        ));
+        self.note(&format!("Verbinde mit {}:{} …", self.world.host, self.world.port));
         let cfg = TelnetConfig {
             mccp: self.world.mccp,
             gmcp: self.world.gmcp,
@@ -388,11 +385,7 @@ impl Session {
     }
 
     /// Ermittelt passende Trigger und färbt die Zeile ggf. um.
-    fn match_triggers(
-        &mut self,
-        line: &mut Line,
-        plain: &str,
-    ) -> Vec<(crate::world::Trigger, Match)> {
+    fn match_triggers(&mut self, line: &mut Line, plain: &str) -> Vec<(crate::world::Trigger, Match)> {
         let matches = self.automation.match_triggers(&self.world.triggers, plain);
         let mut fired = Vec::with_capacity(matches.len());
         for (idx, m) in matches {
@@ -504,8 +497,7 @@ impl Session {
                 }
             }
             SendTo::Script => {
-                self.script
-                    .run_with_matches(&text, chunk, &m.wildcards, &m.named);
+                self.script.run_with_matches(&text, chunk, &m.wildcards, &m.named);
                 self.drain_actions(depth + 1);
             }
         }
@@ -626,11 +618,8 @@ impl Session {
                             .for_each(|t| t.enabled = on);
                     }
                     Action::DoAfter(secs, text, to) => {
-                        self.delayed.push((
-                            Instant::now() + Duration::from_secs_f64(secs.max(0.0)),
-                            text,
-                            to,
-                        ));
+                        self.delayed
+                            .push((Instant::now() + Duration::from_secs_f64(secs.max(0.0)), text, to));
                     }
                     Action::Connect => self.connect(),
                     Action::Disconnect => self.disconnect(),
@@ -643,19 +632,11 @@ impl Session {
     /// Regelmäßig aufrufen (Timer, DoAfter, Neuverbinden). Liefert die Zeit bis zum nächsten Aufruf.
     pub fn tick(&mut self) -> Duration {
         let connected = self.is_connected();
-        let due = self
-            .automation
-            .due_timers(&mut self.world.timers, connected);
+        let due = self.automation.due_timers(&mut self.world.timers, connected);
         for i in due {
             let t = self.world.timers[i].clone();
             if !t.send.is_empty() {
-                self.run_send(
-                    &t.send,
-                    t.send_to,
-                    &Match::default(),
-                    0,
-                    &format!("Timer {}", t.name),
-                );
+                self.run_send(&t.send, t.send_to, &Match::default(), 0, &format!("Timer {}", t.name));
             }
             if !t.script.trim().is_empty() {
                 self.script
@@ -828,10 +809,7 @@ mod integration {
         assert!(s.mccp, "MCCP sollte aktiv sein");
         assert_eq!(s.gmcp_tree["Char"]["Vitals"]["lp"], 100);
         let texts: Vec<String> = s.lines.iter().map(|l| l.plain()).collect();
-        assert!(
-            texts.contains(&"Willkommen in München!".to_string()),
-            "{texts:?}"
-        );
+        assert!(texts.contains(&"Willkommen in München!".to_string()), "{texts:?}");
         s.user_input("gr Ork;ende");
         std::thread::sleep(Duration::from_millis(200));
         s.disconnect();

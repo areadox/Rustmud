@@ -134,18 +134,15 @@ impl ScriptEngine {
             .get(&name)
             .cloned()));
         let s = self.shared.clone();
-        func!(
-            "SetVariable",
-            move |_, (name, value): (String, LuaValue)| {
-                let v = match value {
-                    LuaValue::String(s) => s.to_str()?.to_string(),
-                    LuaValue::Nil => String::new(),
-                    other => other.to_string()?,
-                };
-                s.borrow_mut().variables.insert(name, v);
-                Ok(())
-            }
-        );
+        func!("SetVariable", move |_, (name, value): (String, LuaValue)| {
+            let v = match value {
+                LuaValue::String(s) => s.to_str()?.to_string(),
+                LuaValue::Nil => String::new(),
+                other => other.to_string()?,
+            };
+            s.borrow_mut().variables.insert(name, v);
+            Ok(())
+        });
         let s = self.shared.clone();
         func!("DeleteVariable", move |_, name: String| {
             s.borrow_mut().variables.remove(&name);
@@ -160,67 +157,45 @@ impl ScriptEngine {
             Ok(t)
         });
         let s = self.shared.clone();
-        func!("EnableTrigger", move |_,
-                                     (name, on): (
-            String,
-            Option<bool>
-        )| {
+        func!("EnableTrigger", move |_, (name, on): (String, Option<bool>)| {
             s.borrow_mut()
                 .actions
                 .push(Action::EnableTrigger(name, on.unwrap_or(true)));
             Ok(())
         });
         let s = self.shared.clone();
-        func!(
-            "EnableAlias",
-            move |_, (name, on): (String, Option<bool>)| {
-                s.borrow_mut()
-                    .actions
-                    .push(Action::EnableAlias(name, on.unwrap_or(true)));
-                Ok(())
-            }
-        );
-        let s = self.shared.clone();
-        func!(
-            "EnableTimer",
-            move |_, (name, on): (String, Option<bool>)| {
-                s.borrow_mut()
-                    .actions
-                    .push(Action::EnableTimer(name, on.unwrap_or(true)));
-                Ok(())
-            }
-        );
-        let s = self.shared.clone();
-        func!(
-            "EnableGroup",
-            move |_, (name, on): (String, Option<bool>)| {
-                s.borrow_mut()
-                    .actions
-                    .push(Action::EnableGroup(name, on.unwrap_or(true)));
-                Ok(())
-            }
-        );
-        let s = self.shared.clone();
-        func!("DoAfter", move |_, (secs, text): (f64, String)| {
+        func!("EnableAlias", move |_, (name, on): (String, Option<bool>)| {
             s.borrow_mut()
                 .actions
-                .push(Action::DoAfter(secs, text, SendTo::World));
+                .push(Action::EnableAlias(name, on.unwrap_or(true)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("EnableTimer", move |_, (name, on): (String, Option<bool>)| {
+            s.borrow_mut()
+                .actions
+                .push(Action::EnableTimer(name, on.unwrap_or(true)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("EnableGroup", move |_, (name, on): (String, Option<bool>)| {
+            s.borrow_mut()
+                .actions
+                .push(Action::EnableGroup(name, on.unwrap_or(true)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("DoAfter", move |_, (secs, text): (f64, String)| {
+            s.borrow_mut().actions.push(Action::DoAfter(secs, text, SendTo::World));
             Ok(())
         });
         let s = self.shared.clone();
         func!("DoAfterNote", move |_, (secs, text): (f64, String)| {
-            s.borrow_mut()
-                .actions
-                .push(Action::DoAfter(secs, text, SendTo::Output));
+            s.borrow_mut().actions.push(Action::DoAfter(secs, text, SendTo::Output));
             Ok(())
         });
         let s = self.shared.clone();
-        func!("DoAfterSpecial", move |_,
-                                      (secs, text, target): (
-            f64,
-            String,
-            i32
-        )| {
+        func!("DoAfterSpecial", move |_, (secs, text, target): (f64, String, i32)| {
             // MUSHclient: 0 = World, 2 = Output, 10 = Execute, 12 = Script
             let to = match target {
                 2 => SendTo::Output,
@@ -232,25 +207,14 @@ impl ScriptEngine {
             Ok(())
         });
         let s = self.shared.clone();
-        func!("SendGMCP", move |_,
-                                (package, data): (
-            String,
-            Option<String>
-        )| {
+        func!("SendGMCP", move |_, (package, data): (String, Option<String>)| {
             s.borrow_mut()
                 .actions
-                .push(Action::Raw(crate::telnet::gmcp_packet(
-                    &package,
-                    data.as_deref(),
-                )));
+                .push(Action::Raw(crate::telnet::gmcp_packet(&package, data.as_deref())));
             Ok(())
         });
         let s = self.shared.clone();
-        func!("SendMSDP", move |_,
-                                (var, vals): (
-            String,
-            Variadic<String>
-        )| {
+        func!("SendMSDP", move |_, (var, vals): (String, Variadic<String>)| {
             let v: Vec<&str> = vals.iter().map(String::as_str).collect();
             s.borrow_mut()
                 .actions
@@ -341,11 +305,7 @@ impl ScriptEngine {
         let r = (|| -> mlua::Result<()> {
             let f: Function = match self.lua.globals().get::<LuaValue>(func)? {
                 LuaValue::Function(f) => f,
-                _ => {
-                    return Err(mlua::Error::runtime(format!(
-                        "Funktion „{func}“ nicht gefunden"
-                    )))
-                }
+                _ => return Err(mlua::Error::runtime(format!("Funktion „{func}“ nicht gefunden"))),
             };
             let wc = self.wildcard_table(wildcards, named)?;
             f.call::<()>((name, line, wc))
@@ -354,13 +314,7 @@ impl ScriptEngine {
     }
 
     /// Führt Lua-Code mit gesetzter `matches`/`wildcards`-Tabelle aus.
-    pub fn run_with_matches(
-        &self,
-        code: &str,
-        chunk: &str,
-        wildcards: &[String],
-        named: &BTreeMap<String, String>,
-    ) {
+    pub fn run_with_matches(&self, code: &str, chunk: &str, wildcards: &[String], named: &BTreeMap<String, String>) {
         let r = (|| -> mlua::Result<()> {
             let wc = self.wildcard_table(wildcards, named)?;
             self.lua.globals().set("matches", wc.clone())?;
@@ -370,11 +324,7 @@ impl ScriptEngine {
         self.report(r);
     }
 
-    fn wildcard_table(
-        &self,
-        wildcards: &[String],
-        named: &BTreeMap<String, String>,
-    ) -> mlua::Result<Table> {
+    fn wildcard_table(&self, wildcards: &[String], named: &BTreeMap<String, String>) -> mlua::Result<Table> {
         let t = self.lua.create_table()?;
         for (i, w) in wildcards.iter().enumerate() {
             t.set(i, w.as_str())?;
@@ -466,10 +416,7 @@ mod tests {
     #[test]
     fn gmcp_table() {
         let e = ScriptEngine::new(BTreeMap::new(), "Test");
-        e.run(
-            "function OnGMCP(p) Note(p .. '=' .. gmcp.Char.Vitals.hp) end",
-            "t",
-        );
+        e.run("function OnGMCP(p) Note(p .. '=' .. gmcp.Char.Vitals.hp) end", "t");
         e.on_gmcp("Char.Vitals", &serde_json::json!({"hp": 42}));
         let a = e.take_actions();
         assert!(matches!(&a[0], Action::Note(l) if l.plain() == "Char.Vitals=42"));
@@ -486,10 +433,7 @@ mod tests {
     #[test]
     fn handler_gets_wildcards() {
         let e = ScriptEngine::new(BTreeMap::new(), "Test");
-        e.run(
-            "function f(name, line, wc) Send('winke ' .. wc[1]) end",
-            "t",
-        );
+        e.run("function f(name, line, wc) Send('winke ' .. wc[1]) end", "t");
         e.call_handler(
             "f",
             "trg",

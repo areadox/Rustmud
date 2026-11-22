@@ -2,8 +2,15 @@
 name = "rustmud"
 version = "0.1.0"
 edition = "2021"
-description = "MUD-Client in Rust nach dem Vorbild von MUSHclient"
+description = "MUD-Client in Rust nach dem Vorbild von MUSHclient – Telnet, MCCP, GMCP, MSDP, Trigger, Aliase, Timer und Lua-Scripting"
 license = "MIT"
+authors = ["areadox"]
+repository = "https://github.com/areadox/Rustmud"
+homepage = "https://github.com/areadox/Rustmud"
+readme = "README.md"
+keywords = ["mud", "telnet", "client", "lua", "mushclient"]
+categories = ["games", "network-programming", "gui"]
+exclude = [".github/", "target/"]
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
@@ -14,7 +21,7 @@ flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-chrono = "0.4"
+jiff = "0.2"
 directories = "5"
 encoding_rs = "0.8"
 

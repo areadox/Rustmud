@@ -20,9 +20,5 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([500.0, 300.0]),
         ..Default::default()
     };
-    eframe::run_native(
-        "rustmud",
-        options,
-        Box::new(|cc| Ok(Box::new(app::MudApp::new(cc)))),
-    )
+    eframe::run_native("rustmud", options, Box::new(|cc| Ok(Box::new(app::MudApp::new(cc)))))
 }

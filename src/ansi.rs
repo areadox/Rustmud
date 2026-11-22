@@ -158,10 +158,7 @@ impl AnsiParser {
         let nums: Vec<u32> = if self.params.is_empty() {
             vec![0]
         } else {
-            self.params
-                .split([';', ':'])
-                .map(|p| p.parse().unwrap_or(0))
-                .collect()
+            self.params.split([';', ':']).map(|p| p.parse().unwrap_or(0)).collect()
         };
         let mut i = 0;
         while i < nums.len() {

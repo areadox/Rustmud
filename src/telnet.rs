@@ -71,12 +71,7 @@ impl Default for TelnetConfig {
             utf8: false,
             client_name: "RUSTMUD".into(),
             client_version: env!("CARGO_PKG_VERSION").into(),
-            gmcp_supports: vec![
-                "Core 1".into(),
-                "Char 1".into(),
-                "Room 1".into(),
-                "Comm 1".into(),
-            ],
+            gmcp_supports: vec!["Core 1".into(), "Char 1".into(), "Room 1".into(), "Comm 1".into()],
         }
     }
 }
@@ -208,12 +203,7 @@ impl TelnetParser {
 
     /// Parst Klartext-Telnet. Liefert `Some(index)`, wenn ab `index` der
     /// MCCP-komprimierte Datenstrom beginnt.
-    fn parse(
-        &mut self,
-        input: &[u8],
-        events: &mut Vec<TelnetEvent>,
-        reply: &mut Vec<u8>,
-    ) -> Option<usize> {
+    fn parse(&mut self, input: &[u8], events: &mut Vec<TelnetEvent>, reply: &mut Vec<u8>) -> Option<usize> {
         for (i, &b) in input.iter().enumerate() {
             match self.state {
                 State::Data => {
@@ -380,10 +370,7 @@ impl TelnetParser {
                 } else {
                     serde_json::from_str(&rest).unwrap_or(Value::String(rest))
                 };
-                events.push(TelnetEvent::Gmcp {
-                    package,
-                    data: value,
-                });
+                events.push(TelnetEvent::Gmcp { package, data: value });
             }
             OPT_MSDP => {
                 let vars = parse_msdp(&data);
@@ -428,10 +415,7 @@ impl TelnetParser {
                 .map(|s| Value::String(s.clone()))
                 .collect(),
         );
-        reply.extend(gmcp_packet(
-            "Core.Supports.Set",
-            Some(&supports.to_string()),
-        ));
+        reply.extend(gmcp_packet("Core.Supports.Set", Some(&supports.to_string())));
     }
 }
 
@@ -678,10 +662,7 @@ mod tests {
         input.extend_from_slice(&compressed);
         input.extend_from_slice(b"nachher");
         let (ev, _) = run(&mut p, &input);
-        assert_eq!(
-            data_of(&ev),
-            b"vorher Willkommen im MUD!\r\nnachher".to_vec()
-        );
+        assert_eq!(data_of(&ev), b"vorher Willkommen im MUD!\r\nnachher".to_vec());
         assert!(ev.contains(&TelnetEvent::CompressionStarted));
         assert!(ev.contains(&TelnetEvent::CompressionEnded));
     }

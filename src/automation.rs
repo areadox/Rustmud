@@ -40,19 +40,12 @@ pub struct Match {
 impl Match {
     fn from_caps(re: &Regex, caps: &regex::Captures) -> Self {
         let wildcards = (0..caps.len())
-            .map(|i| {
-                caps.get(i)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default()
-            })
+            .map(|i| caps.get(i).map(|m| m.as_str().to_string()).unwrap_or_default())
             .collect();
         let named = re
             .capture_names()
             .flatten()
-            .filter_map(|n| {
-                caps.name(n)
-                    .map(|m| (n.to_string(), m.as_str().to_string()))
-            })
+            .filter_map(|n| caps.name(n).map(|m| (n.to_string(), m.as_str().to_string())))
             .collect();
         Self { wildcards, named }
     }
@@ -68,12 +61,7 @@ pub fn substitute(template: &str, m: &Match, vars: &BTreeMap<String, String>) ->
         if c == '%' && i + 1 < chars.len() {
             let n = chars[i + 1];
             if let Some(d) = n.to_digit(10) {
-                out.push_str(
-                    m.wildcards
-                        .get(d as usize)
-                        .map(String::as_str)
-                        .unwrap_or(""),
-                );
+                out.push_str(m.wildcards.get(d as usize).map(String::as_str).unwrap_or(""));
                 i += 2;
                 continue;
             }
@@ -135,28 +123,24 @@ impl Automation {
             }
             match compile(&t.pattern, t.regex, t.ignore_case) {
                 Ok(re) => self.triggers.push((i, re)),
-                Err(e) => self.errors.push(format!(
-                    "Trigger „{}“: {e}",
-                    display_name(&t.name, &t.pattern)
-                )),
+                Err(e) => self
+                    .errors
+                    .push(format!("Trigger „{}“: {e}", display_name(&t.name, &t.pattern))),
             }
         }
-        self.triggers
-            .sort_by_key(|(i, _)| (triggers[*i].sequence, *i));
+        self.triggers.sort_by_key(|(i, _)| (triggers[*i].sequence, *i));
         for (i, a) in aliases.iter().enumerate() {
             if a.pattern.is_empty() {
                 continue;
             }
             match compile(&a.pattern, a.regex, a.ignore_case) {
                 Ok(re) => self.aliases.push((i, re)),
-                Err(e) => self.errors.push(format!(
-                    "Alias „{}“: {e}",
-                    display_name(&a.name, &a.pattern)
-                )),
+                Err(e) => self
+                    .errors
+                    .push(format!("Alias „{}“: {e}", display_name(&a.name, &a.pattern))),
             }
         }
-        self.aliases
-            .sort_by_key(|(i, _)| (aliases[*i].sequence, *i));
+        self.aliases.sort_by_key(|(i, _)| (aliases[*i].sequence, *i));
         self.reset_timers(timers);
     }
 
@@ -164,9 +148,7 @@ impl Automation {
         let now = Instant::now();
         self.timer_next = timers
             .iter()
-            .map(|t| {
-                (t.enabled && t.interval > 0.0).then(|| now + Duration::from_secs_f64(t.interval))
-            })
+            .map(|t| (t.enabled && t.interval > 0.0).then(|| now + Duration::from_secs_f64(t.interval)))
             .collect();
     }
 
