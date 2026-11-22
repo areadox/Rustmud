@@ -58,6 +58,15 @@ function OnPluginInstall()
   WindowOption(FENSTER, "fit", true)
 end
 
+-- Enthält der Kartenteil echte Wörter (≥ 3 Buchstaben)? Dann ist es eine Tabelle oder ein Kasten.
+-- Folgen aus o/O/x/X (z. B. Bäume „oOo“) und einzelne Buchstaben wie (N) gelten als Kartenzeichen.
+local function hat_woerter(s)
+  for wort in s:gmatch("%a+") do
+    if #wort >= 3 and not wort:match("^[oOxX]+$") then return true end
+  end
+  return false
+end
+
 -- Merkt sich die Originalzeile; ausgeblendete Zeilen werden bei einem Irrtum nachgereicht
 local function merken(ansi, rest)
   table.insert(original, { ansi = ansi, ausgeblendet = (rest == "") })
@@ -90,7 +99,7 @@ function OnPluginLineReceived(plain, ansi)
   local ist_ende = rahmen(plain) == w
 
   -- Kartenzeilen enthalten keine Wörter – sonst ist es eine Tabelle oder ein Kasten
-  if ist_zeile and karte:find("%a%a%a") then
+  if ist_zeile and hat_woerter(karte) then
     verwerfen()
     return true
   end

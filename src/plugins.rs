@@ -388,6 +388,42 @@ mod tests {
 +----+----+
 ";
 
+    /// Landschaftskarte mit Bäumen „oOo“ (Buchstaben in der Karte) und Rahmen nur unten mit Text daneben
+    #[test]
+    fn karte_plugin_with_letter_terrain() {
+        let (mut s, dirs) = session_with(&["karte"]);
+        let before = s.lines.len();
+        feed(
+            &mut s,
+            "\
++-----------------+ Du befindest Dich auf einem breiten Weg entlang, der
+|oOo|.~.|....&oooO| durch sanfte Huegel und Wiesen fuehrt. Der Weg verlaeuft
+|oOo|.~.|....&o&oo| von Westen nach Osten.
+|&oo|.~.|....&o&oo| Es ist Nacht.
+|&o|.~.||.......&o| 
+|o|.~.||#X######..| 
+|#|.~..|**~~~**...| 
++-----------------+ 
+",
+        );
+        let out: Vec<String> = s.lines.iter().skip(before).map(|l| l.plain()).collect();
+        assert_eq!(
+            out,
+            vec![
+                "Du befindest Dich auf einem breiten Weg entlang, der",
+                "durch sanfte Huegel und Wiesen fuehrt. Der Weg verlaeuft",
+                "von Westen nach Osten.",
+                "Es ist Nacht.",
+            ]
+        );
+        let map = window_lines(&s, "karte");
+        assert_eq!(map.len(), 8);
+        assert_eq!(map[1], "|oOo|.~.|....&oooO|");
+        for d in dirs {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
     #[test]
     fn karte_plugin_cuts_map() {
         let (mut s, dirs) = session_with(&["karte"]);

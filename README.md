@@ -149,7 +149,7 @@ rustmud bringt einige Plugins gleich mit. Sie werden beim ersten Start installie
 Das Plugin schneidet den Kartenblock heraus, zeigt ihn farbig im Fenster „Karte“ und lässt nur den Text in der
 Ausgabe (auch Trigger sehen nur den Text). Breite und Höhe werden bei jeder Karte neu aus dem Rahmen bestimmt, eine
 mit der Zeit wachsende Karte wird also automatisch erkannt und an das Fenster angepasst. Kästen und Tabellen mit
-Wörtern darin bleiben in der Ausgabe. Befehle: `karte` (Fenster zeigen), `karte breite <zahl>` (maximale
+Wörtern darin bleiben in der Ausgabe; Buchstaben als Kartenzeichen (z. B. Bäume `oOo`, Orte `(N)`) sind erlaubt. Befehle: `karte` (Fenster zeigen), `karte breite <zahl>` (maximale
 Kartenbreite, Standard 60).
 
 **📊 Spielstand** – Erkennt die Spielstand-Tabelle (z. B. nach `sp`/`score`) und zeigt sie als Fenster mit farbigen

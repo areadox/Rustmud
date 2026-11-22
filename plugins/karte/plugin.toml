@@ -1,6 +1,6 @@
 id = "karte"
 name = "Karte"
-version = "1.1.0"
+version = "1.2.0"
 author = "areadox"
 description = "Schneidet ASCII-Karten (Rahmen +----+ und Zeilen |....|), die der MUD links neben den Raumtext setzt, aus der Ausgabe heraus und zeigt sie in einem eigenen Fenster. Größe der Karte wird jedes Mal neu erkannt. Markiert außerdem den Raumbeginn für die Seitenansicht."
 main = "main.lua"
