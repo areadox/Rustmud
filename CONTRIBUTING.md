@@ -40,12 +40,18 @@ cargo test
 
 ## Neue Version veröffentlichen (Betreuer)
 
-1. Version in `Cargo.toml` erhöhen und `CHANGELOG.md` ergänzen, committen und pushen.
-2. Entweder `git tag vX.Y.Z && git push origin vX.Y.Z` oder auf GitHub unter **Releases → Draft a new release**
-   einen neuen Tag `vX.Y.Z` anlegen und veröffentlichen.
-3. Der Release-Workflow baut die Pakete für Windows, Linux und macOS sowie den Windows-Installer
-   (`rustmud-setup-x64.exe`) und hängt sie an das Release an. Die Update-Funktion im Programm sucht genau
-   diesen Dateinamen – bitte nicht ändern.
+Releases laufen automatisch über GitHub Actions ([`release.yml`](.github/workflows/release.yml)):
+
+1. `version` in der `Cargo.toml` erhöhen (z. B. `0.0.3`) und in der `CHANGELOG.md` die Einträge unter
+   „Unveröffentlicht“ in einen neuen Abschnitt `## [0.0.3] – Datum` verschieben.
+2. Committen und auf `main` pushen.
+3. Der Workflow erkennt die neue Version (es gibt noch keinen Tag `v0.0.3`), führt die Tests aus, baut die Pakete
+   für Windows, Linux und macOS sowie den Windows-Installer (`rustmud-setup-x64.exe`), legt den Tag an und
+   veröffentlicht das Release mit dem CHANGELOG-Abschnitt als Beschreibung.
+
+Alternativ: unter **Actions → Release → Run workflow** manuell starten, oder klassisch einen Tag `vX.Y.Z` pushen
+bzw. auf GitHub ein Release mit neuem Tag anlegen. Die Update-Funktion im Programm sucht genau den Dateinamen
+`rustmud-setup-x64.exe` – bitte nicht ändern.
 
 Den Installer lokal bauen (benötigt [NSIS](https://nsis.sourceforge.io/)):
 

@@ -1,28 +1,73 @@
 name: Release
 
-# Startet bei jedem neuen Versions-Tag – egal ob per
-# „git tag v0.0.2 && git push origin v0.0.2“ oder beim Veröffentlichen eines
-# Releases auf GitHub (dabei wird der Tag ebenfalls angelegt).
+# Ein Release entsteht automatisch, sobald auf main eine neue Version in der
+# Cargo.toml steht, für die es noch keinen Tag gibt:
+#   1. version in Cargo.toml erhöhen, CHANGELOG.md ergänzen
+#   2. committen und auf main pushen  →  Tag vX.Y.Z, Pakete, Installer und Release
+#
+# Außerdem möglich: manuell unter „Actions → Release → Run workflow“ oder
+# klassisch per Tag (git tag vX.Y.Z && git push origin vX.Y.Z / Release auf GitHub).
 on:
   push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - .github/workflows/release.yml
     tags: ["v*"]
-
-concurrency:
-  group: release-${{ github.ref_name }}
-  cancel-in-progress: false
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: Version prüfen
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        name: Version bestimmen
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            release=true
+          else
+            version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+            if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+              echo "Tag v$version gibt es schon – kein neues Release."
+              release=false
+            else
+              echo "Neue Version $version – Release wird erstellt."
+              release=true
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+      - name: Prüfen, ob die Version im CHANGELOG steht
+        if: steps.v.outputs.release == 'true'
+        run: |
+          grep -q "^## \[${{ steps.v.outputs.version }}\]" CHANGELOG.md \
+            || echo "::warning::CHANGELOG.md hat keinen Abschnitt für ${{ steps.v.outputs.version }}"
+
   build:
     name: Build (${{ matrix.target }})
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: windows-latest
@@ -43,6 +88,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Paket erstellen (Windows)
         if: runner.os == 'Windows'
@@ -60,13 +106,7 @@ jobs:
             choco install nsis --no-progress -y
             $env:PATH += ";${env:ProgramFiles(x86)}\NSIS"
           }
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          makensis /V2 /DVERSION=$version /DEXE=..\target\${{ matrix.target }}\release\rustmud.exe /DOUTFILE=..\rustmud-setup-x64.exe installer\rustmud.nsi
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
-        with:
-          name: rustmud-setup-x64.exe
-          path: rustmud-setup-x64.exe
+          makensis /V2 /DVERSION=${{ needs.prepare.outputs.version }} /DEXE=..\target\${{ matrix.target }}\release\rustmud.exe /DOUTFILE=..\rustmud-setup-x64.exe installer\rustmud.nsi
       - name: Paket erstellen (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -78,17 +118,40 @@ jobs:
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: rustmud-setup-x64.exe
+          path: rustmud-setup-x64.exe
 
   release:
     name: GitHub-Release
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Release-Text aus dem CHANGELOG
+        run: |
+          v="${{ needs.prepare.outputs.version }}"
+          awk -v v="$v" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "**Download:** Für Windows am besten \`rustmud-setup-x64.exe\` (Installer mit Update-Funktion)."
+            echo "Wer schon rustmud installiert hat, bekommt das Update beim nächsten Start angeboten."
+          } >> notes.md
+          cat notes.md
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: rustmud ${{ needs.prepare.outputs.version }}
+          body_path: notes.md
           files: dist/*
-          generate_release_notes: true
