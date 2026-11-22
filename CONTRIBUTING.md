@@ -38,6 +38,13 @@ cargo test
    „Unveröffentlicht“ in der `CHANGELOG.md` ein.
 5. Beschreibe im Pull Request, was sich ändert und warum.
 
+## Neue Version veröffentlichen (Betreuer)
+
+1. Version in `Cargo.toml` erhöhen und `CHANGELOG.md` ergänzen, committen und pushen.
+2. Entweder `git tag vX.Y.Z && git push origin vX.Y.Z` oder auf GitHub unter **Releases → Draft a new release**
+   einen neuen Tag `vX.Y.Z` anlegen und veröffentlichen.
+3. Der Release-Workflow baut die Pakete für Windows, Linux und macOS und hängt sie an das Release an.
+
 ## Lizenz deiner Beiträge
 
 Mit dem Einreichen eines Beitrags erklärst du dich einverstanden, dass er unter der

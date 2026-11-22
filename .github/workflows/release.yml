@@ -1,9 +1,12 @@
 name: Release
 
-# Startet bei einem Versions-Tag, z. B.: git tag v0.0.1 && git push origin v0.0.1
+# Startet bei einem Versions-Tag (git tag v0.0.1 && git push origin v0.0.1)
+# oder wenn auf GitHub unter „Releases“ ein Release veröffentlicht wird.
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
