@@ -43,7 +43,16 @@ cargo test
 1. Version in `Cargo.toml` erhöhen und `CHANGELOG.md` ergänzen, committen und pushen.
 2. Entweder `git tag vX.Y.Z && git push origin vX.Y.Z` oder auf GitHub unter **Releases → Draft a new release**
    einen neuen Tag `vX.Y.Z` anlegen und veröffentlichen.
-3. Der Release-Workflow baut die Pakete für Windows, Linux und macOS und hängt sie an das Release an.
+3. Der Release-Workflow baut die Pakete für Windows, Linux und macOS sowie den Windows-Installer
+   (`rustmud-setup-x64.exe`) und hängt sie an das Release an. Die Update-Funktion im Programm sucht genau
+   diesen Dateinamen – bitte nicht ändern.
+
+Den Installer lokal bauen (benötigt [NSIS](https://nsis.sourceforge.io/)):
+
+```sh
+cargo build --release
+makensis /DVERSION=0.0.1 installer/rustmud.nsi
+```
 
 ## Lizenz deiner Beiträge
 

@@ -22,6 +22,7 @@ allow = [
   "0BSD",
   "Unlicense",
   "Unicode-3.0",
+  "CDLA-Permissive-2.0",
   "MPL-2.0",
   "OFL-1.1",
   "Ubuntu-font-1.0",

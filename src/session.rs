@@ -253,19 +253,8 @@ impl Session {
         self.decoder = make_decoder(self.world.encoding);
         self.ansi = AnsiParser::new();
         self.note(&format!("Verbunden ({peer})."));
-        if self.world.logging {
-            let dir = if self.world.log_dir.trim().is_empty() {
-                default_log_dir()
-            } else {
-                PathBuf::from(self.world.log_dir.trim())
-            };
-            match Logger::open(&dir, &self.world.name) {
-                Ok(l) => {
-                    self.note(&format!("Log: {}", l.path.display()));
-                    self.logger = Some(l);
-                }
-                Err(e) => self.error(&format!("Log konnte nicht geöffnet werden: {e}")),
-            }
+        if self.world.logging && self.logger.is_none() {
+            self.open_logger();
         }
         self.automation.reset_timers(&self.world.timers);
         let connect_text = self.world.connect_text.clone();
@@ -561,6 +550,57 @@ impl Session {
         if self.naws && self.is_connected() {
             let p = naws_packet(self.term_size.0, self.term_size.1);
             self.send_raw(&p);
+        }
+    }
+
+    /// Ziffernblock-Taste ("8", "+", …) gemäß Belegung der Welt ausführen.
+    pub fn keypad(&mut self, key: &str) {
+        if !self.world.keypad_enabled {
+            return;
+        }
+        if let Some(cmd) = self.world.keypad.get(key).cloned() {
+            if !cmd.trim().is_empty() {
+                self.execute(&cmd, 0);
+            }
+        }
+    }
+
+    /// Eigenen Knopf aus der Icon-Leiste auslösen.
+    pub fn run_button(&mut self, idx: usize) {
+        if let Some(b) = self.world.buttons.get(idx).cloned() {
+            if !b.send.is_empty() {
+                self.run_send(&b.send, b.send_to, &Match::default(), 0, &format!("Knopf {}", b.label));
+            }
+        }
+    }
+
+    pub fn is_logging(&self) -> bool {
+        self.logger.is_some()
+    }
+
+    /// Log sofort ein- oder ausschalten (und als Welteinstellung merken).
+    pub fn set_logging(&mut self, on: bool) {
+        self.world.logging = on;
+        if on && self.logger.is_none() {
+            self.open_logger();
+        } else if !on && self.logger.is_some() {
+            self.logger = None;
+            self.note("Log beendet.");
+        }
+    }
+
+    fn open_logger(&mut self) {
+        let dir = if self.world.log_dir.trim().is_empty() {
+            default_log_dir()
+        } else {
+            PathBuf::from(self.world.log_dir.trim())
+        };
+        match Logger::open(&dir, &self.world.name) {
+            Ok(l) => {
+                self.note(&format!("Log: {}", l.path.display()));
+                self.logger = Some(l);
+            }
+            Err(e) => self.error(&format!("Log konnte nicht geöffnet werden: {e}")),
         }
     }
 

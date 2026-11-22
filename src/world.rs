@@ -156,6 +156,52 @@ impl Default for Timer {
     }
 }
 
+/// Eigener Knopf in der Icon-Leiste.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserButton {
+    /// Beschriftung (Text oder Symbol)
+    pub label: String,
+    pub tooltip: String,
+    pub send: String,
+    pub send_to: SendTo,
+}
+
+impl Default for UserButton {
+    fn default() -> Self {
+        Self {
+            label: "Neu".into(),
+            tooltip: String::new(),
+            send: String::new(),
+            send_to: SendTo::Execute,
+        }
+    }
+}
+
+/// Standardbelegung für deutschsprachige MUDs.
+pub fn default_keypad() -> BTreeMap<String, String> {
+    [
+        ("8", "n"),
+        ("2", "s"),
+        ("4", "w"),
+        ("6", "o"),
+        ("7", "nw"),
+        ("9", "no"),
+        ("1", "sw"),
+        ("3", "so"),
+        ("5", "schau"),
+        ("-", "ob"),
+        ("+", "u"),
+        ("0", ""),
+        (".", ""),
+        ("/", ""),
+        ("*", ""),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct World {
@@ -186,6 +232,10 @@ pub struct World {
     pub auto_reconnect: bool,
     /// Beim Öffnen der Welt sofort verbinden
     pub auto_connect: bool,
+    /// Mit dem Ziffernblock laufen
+    pub keypad_enabled: bool,
+    pub keypad: BTreeMap<String, String>,
+    pub buttons: Vec<UserButton>,
     pub triggers: Vec<Trigger>,
     pub aliases: Vec<Alias>,
     pub timers: Vec<Timer>,
@@ -216,6 +266,9 @@ impl Default for World {
             font_size: 14.0,
             auto_reconnect: false,
             auto_connect: false,
+            keypad_enabled: true,
+            keypad: default_keypad(),
+            buttons: Vec::new(),
             triggers: Vec::new(),
             aliases: Vec::new(),
             timers: Vec::new(),
@@ -253,6 +306,30 @@ impl World {
             .collect();
         format!("{}.toml", if slug.is_empty() { "welt".into() } else { slug })
     }
+}
+
+/// Pfad, unter dem eine Welt mit diesem Namen gespeichert würde.
+pub fn path_for(world: &World) -> PathBuf {
+    worlds_dir().join(world.file_name())
+}
+
+/// Freier Name für eine Kopie: „Name (Kopie)“, „Name (Kopie 2)“ …
+pub fn unique_name(base: &str) -> String {
+    let taken: Vec<String> = list_worlds().into_iter().map(|(_, n)| n.to_lowercase()).collect();
+    if !taken.contains(&base.to_lowercase()) {
+        return base.to_string();
+    }
+    for i in 1.. {
+        let candidate = if i == 1 {
+            format!("{base} (Kopie)")
+        } else {
+            format!("{base} (Kopie {i})")
+        };
+        if !taken.contains(&candidate.to_lowercase()) {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 /// Basisordner für Konfiguration (Welten, Logs).

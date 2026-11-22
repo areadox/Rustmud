@@ -1,14 +1,16 @@
-//! Hauptfenster: Welt-Tabs, Ausgabe, Eingabezeile, Menüs, Statusleiste.
+//! Hauptfenster: Icon-Leiste, Welt-Tabs, Ausgabe, Eingabezeile, Menüs,
+//! Weltenverwaltung, Update-Hinweis und Statusleiste.
 
 use crate::ansi::{resolve, Line};
 use crate::session::{ConnState, Session, Waker};
 use crate::ui_editors::{self, EditorState, VarState};
-use crate::world::{config_dir, list_worlds, World};
+use crate::updater::{self, UpdateState};
+use crate::world::{config_dir, list_worlds, path_for, unique_name, Encoding, World};
 use egui::text::{CCursor, CCursorRange, LayoutJob};
-use egui::{Color32, FontId, Key, RichText, ScrollArea, Stroke, TextEdit, TextFormat};
+use egui::{Button, Color32, FontId, Key, RichText, ScrollArea, Stroke, TextEdit, TextFormat};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const DEFAULT_FG: (u8, u8, u8) = (192, 192, 192);
 const DEFAULT_BG: (u8, u8, u8) = (0, 0, 0);
@@ -25,11 +27,14 @@ struct View {
     show_aliases: bool,
     show_timers: bool,
     show_vars: bool,
+    show_keypad: bool,
+    show_buttons: bool,
     show_gmcp: bool,
     trg: EditorState,
     ali: EditorState,
     tim: EditorState,
     vars: VarState,
+    button_sel: Option<usize>,
 }
 
 impl View {
@@ -45,64 +50,151 @@ impl View {
             show_aliases: false,
             show_timers: false,
             show_vars: false,
+            show_keypad: false,
+            show_buttons: false,
             show_gmcp: false,
             trg: EditorState::default(),
             ali: EditorState::default(),
             tim: EditorState::default(),
             vars: VarState::default(),
+            button_sel: None,
         }
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+fn yes() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize)]
 struct AppState {
+    #[serde(default)]
     open_worlds: Vec<PathBuf>,
     #[serde(default)]
     active: usize,
+    #[serde(default = "yes")]
+    check_updates: bool,
+    #[serde(default = "yes")]
+    show_toolbar: bool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            open_worlds: Vec::new(),
+            active: 0,
+            check_updates: true,
+            show_toolbar: true,
+        }
+    }
 }
 
 fn app_state_path() -> PathBuf {
     config_dir().join("rustmud.toml")
 }
 
+/// Eingabefelder und Zustand der Weltenverwaltung.
+struct WorldManager {
+    open: bool,
+    worlds: Option<Vec<(PathBuf, World)>>,
+    new_name: String,
+    new_host: String,
+    new_port: u16,
+    new_encoding: Encoding,
+    rename: Option<(PathBuf, String)>,
+    confirm_delete: Option<PathBuf>,
+    message: String,
+}
+
+impl Default for WorldManager {
+    fn default() -> Self {
+        Self {
+            open: false,
+            worlds: None,
+            new_name: String::new(),
+            new_host: String::new(),
+            new_port: 23,
+            new_encoding: Encoding::Latin1,
+            rename: None,
+            confirm_delete: None,
+            message: String::new(),
+        }
+    }
+}
+
+enum WmAction {
+    Open(PathBuf, bool),
+    Edit(PathBuf),
+    Create,
+    Duplicate(PathBuf),
+    Rename(PathBuf, String),
+    Delete(PathBuf),
+    Import,
+    Export(PathBuf),
+}
+
 pub struct MudApp {
     views: Vec<View>,
     active: usize,
     waker: Waker,
-    show_open: bool,
+    ctx: egui::Context,
+    wm: WorldManager,
+    settings: AppState,
+    show_about: bool,
+    update: updater::Shared,
+    update_dismissed: bool,
     status: String,
 }
 
 impl MudApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
-        let waker: Waker = Arc::new(move || ctx.request_repaint());
+        let c2 = ctx.clone();
+        let waker: Waker = Arc::new(move || c2.request_repaint());
+        crate::keypad::install(cc);
+
+        let settings: AppState = std::fs::read_to_string(app_state_path())
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
         let mut app = Self {
             views: Vec::new(),
             active: 0,
             waker,
-            show_open: false,
+            ctx: ctx.clone(),
+            wm: WorldManager::default(),
+            settings,
+            show_about: false,
+            update: Arc::new(Mutex::new(UpdateState::Idle)),
+            update_dismissed: false,
             status: String::new(),
         };
-
-        let state: AppState = std::fs::read_to_string(app_state_path())
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default();
-        for p in &state.open_worlds {
-            if let Ok(w) = World::load(p) {
-                app.open_world(w, Some(p.clone()));
+        for p in app.settings.open_worlds.clone() {
+            if let Ok(w) = World::load(&p) {
+                app.open_world(w, Some(p), false);
             }
         }
-        app.active = state.active.min(app.views.len().saturating_sub(1));
+        app.active = app.settings.active.min(app.views.len().saturating_sub(1));
         if app.views.is_empty() {
-            app.show_open = true;
+            app.wm.open = true;
+        }
+        if app.settings.check_updates {
+            updater::check(app.update.clone(), ctx);
         }
         app
     }
 
-    fn open_world(&mut self, world: World, path: Option<PathBuf>) {
-        let auto = world.auto_connect;
+    fn open_world(&mut self, world: World, path: Option<PathBuf>, connect: bool) {
+        if let Some(p) = &path {
+            if let Some(i) = self.views.iter().position(|v| v.session.world_path.as_ref() == Some(p)) {
+                self.active = i;
+                if connect {
+                    self.views[i].session.connect();
+                }
+                return;
+            }
+        }
+        let auto = world.auto_connect || connect;
         let mut session = Session::new(world, path, self.waker.clone());
         if auto {
             session.connect();
@@ -119,137 +211,611 @@ impl MudApp {
                 Err(e) => eprintln!("Speichern fehlgeschlagen: {e}"),
             }
         }
-        let st = AppState {
-            open_worlds: open,
-            active: self.active,
-        };
-        if let Ok(text) = toml::to_string_pretty(&st) {
+        self.settings.open_worlds = open;
+        self.settings.active = self.active;
+        self.save_settings();
+    }
+
+    fn save_settings(&self) {
+        if let Ok(text) = toml::to_string_pretty(&self.settings) {
             let _ = std::fs::create_dir_all(config_dir());
             let _ = std::fs::write(app_state_path(), text);
         }
     }
 
-    fn close_view(&mut self, i: usize) {
+    fn close_view(&mut self, i: usize, save: bool) {
         let mut v = self.views.remove(i);
         v.session.disconnect();
-        let _ = v.session.save_world();
+        if save {
+            let _ = v.session.save_world();
+        }
         if self.active >= self.views.len() {
             self.active = self.views.len().saturating_sub(1);
         }
     }
 
+    fn view_index(&self, path: &PathBuf) -> Option<usize> {
+        self.views
+            .iter()
+            .position(|v| v.session.world_path.as_ref() == Some(path))
+    }
+
+    fn save_active(&mut self) {
+        if let Some(v) = self.views.get_mut(self.active) {
+            self.status = match v.session.save_world() {
+                Ok(p) => format!("Gespeichert: {}", p.display()),
+                Err(e) => format!("Fehler: {e}"),
+            };
+            self.wm.worlds = None;
+        }
+    }
+
+    // ------------------------------------------------------------ Menü
+
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("Welt", |ui| {
-                if ui.button("Öffnen / Neu …").clicked() {
-                    self.show_open = true;
+                if ui.button("🌍 Weltenverwaltung …").clicked() {
+                    self.wm.open = true;
+                    self.wm.worlds = None;
                     ui.close_menu();
                 }
                 let has = !self.views.is_empty();
-                if ui.add_enabled(has, egui::Button::new("Speichern")).clicked() {
-                    let v = &mut self.views[self.active];
-                    self.status = match v.session.save_world() {
-                        Ok(p) => format!("Gespeichert: {}", p.display()),
-                        Err(e) => format!("Fehler: {e}"),
-                    };
+                if ui.add_enabled(has, Button::new("💾 Speichern")).clicked() {
+                    self.save_active();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.add_enabled(has, egui::Button::new("Verbinden")).clicked() {
+                if ui.add_enabled(has, Button::new("Verbinden")).clicked() {
                     self.views[self.active].session.connect();
                     ui.close_menu();
                 }
-                if ui.add_enabled(has, egui::Button::new("Trennen")).clicked() {
+                if ui.add_enabled(has, Button::new("Trennen")).clicked() {
                     self.views[self.active].session.disconnect();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.add_enabled(has, egui::Button::new("Welt schließen")).clicked() {
+                if ui.add_enabled(has, Button::new("Welt schließen")).clicked() {
                     let a = self.active;
-                    self.close_view(a);
+                    self.close_view(a, true);
                     ui.close_menu();
+                }
+                if ui.button("Beenden").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
-            let Some(v) = self.views.get_mut(self.active) else {
-                return;
-            };
-            ui.menu_button("Konfiguration", |ui| {
-                if ui.button("Welt-Einstellungen …").clicked() {
-                    v.show_settings = true;
+            if let Some(v) = self.views.get_mut(self.active) {
+                ui.menu_button("Konfiguration", |ui| {
+                    for (flag, label) in [
+                        (&mut v.show_settings, "⚙ Welt-Einstellungen …"),
+                        (&mut v.show_triggers, "⚡ Trigger …"),
+                        (&mut v.show_aliases, "⌨ Aliase …"),
+                        (&mut v.show_timers, "⏱ Timer …"),
+                        (&mut v.show_vars, "📋 Variablen …"),
+                        (&mut v.show_keypad, "🔢 Ziffernblock …"),
+                        (&mut v.show_buttons, "🔘 Eigene Knöpfe …"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            *flag = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+                ui.menu_button("Skript", |ui| {
+                    if ui.button("🔄 Lua neu laden").clicked() {
+                        v.session.reload_script();
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Ansicht", |ui| {
+                    ui.checkbox(&mut self.settings.show_toolbar, "Icon-Leiste");
+                    ui.checkbox(&mut v.show_gmcp, "GMCP/MSDP-Daten");
+                    if ui.button("Ausgabe leeren").clicked() {
+                        v.session.clear_output();
+                        ui.close_menu();
+                    }
+                });
+            }
+            ui.menu_button("Hilfe", |ui| {
+                if ui.button("Nach Updates suchen").clicked() {
+                    self.update_dismissed = false;
+                    updater::check(self.update.clone(), self.ctx.clone());
+                    self.show_about = true;
                     ui.close_menu();
                 }
-                if ui.button("Trigger …").clicked() {
-                    v.show_triggers = true;
+                if ui.button("Projektseite (GitHub)").clicked() {
+                    updater::open_url(&format!("https://github.com/{}", updater::REPO));
                     ui.close_menu();
                 }
-                if ui.button("Aliase …").clicked() {
-                    v.show_aliases = true;
-                    ui.close_menu();
-                }
-                if ui.button("Timer …").clicked() {
-                    v.show_timers = true;
-                    ui.close_menu();
-                }
-                if ui.button("Variablen …").clicked() {
-                    v.show_vars = true;
-                    ui.close_menu();
-                }
-            });
-            ui.menu_button("Skript", |ui| {
-                if ui.button("Lua neu laden").clicked() {
-                    v.session.reload_script();
-                    ui.close_menu();
-                }
-            });
-            ui.menu_button("Ansicht", |ui| {
-                ui.checkbox(&mut v.show_gmcp, "GMCP/MSDP-Daten");
-                if ui.button("Ausgabe leeren").clicked() {
-                    v.session.clear_output();
+                if ui.button("Über rustmud / Programmeinstellungen …").clicked() {
+                    self.show_about = true;
                     ui.close_menu();
                 }
             });
         });
     }
 
-    fn open_dialog(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_open;
-        let mut chosen: Option<(World, Option<PathBuf>)> = None;
-        egui::Window::new("Welt öffnen")
-            .open(&mut open)
-            .collapsible(false)
-            .default_width(360.0)
-            .show(ctx, |ui| {
-                let worlds = list_worlds();
-                if worlds.is_empty() {
-                    ui.label("Noch keine Welten gespeichert.");
-                }
-                for (path, name) in worlds {
-                    if ui.button(&name).on_hover_text(path.display().to_string()).clicked() {
-                        match World::load(&path) {
-                            Ok(w) => chosen = Some((w, Some(path))),
-                            Err(e) => self.status = e,
-                        }
+    // ------------------------------------------------------------ Icon-Leiste
+
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
+        let big = |s: &str| RichText::new(s).size(18.0);
+        ui.horizontal(|ui| {
+            if ui.button(big("🌍")).on_hover_text("Weltenverwaltung").clicked() {
+                self.wm.open = true;
+                self.wm.worlds = None;
+            }
+            let Some(v) = self.views.get_mut(self.active) else {
+                return;
+            };
+            match v.session.state {
+                ConnState::Disconnected => {
+                    if ui.button(big("🔌")).on_hover_text("Verbinden").clicked() {
+                        v.session.connect();
                     }
                 }
-                ui.separator();
-                if ui.button("➕ Neue Welt").clicked() {
-                    chosen = Some((World::default(), None));
+                _ => {
+                    if ui.button(big("⏏")).on_hover_text("Trennen").clicked() {
+                        v.session.disconnect();
+                    }
                 }
+            }
+            let mut save = false;
+            if ui.button(big("💾")).on_hover_text("Welt speichern").clicked() {
+                save = true;
+            }
+            ui.separator();
+            for (flag, icon, tip) in [
+                (&mut v.show_settings, "⚙", "Welt-Einstellungen"),
+                (&mut v.show_triggers, "⚡", "Trigger"),
+                (&mut v.show_aliases, "⌨", "Aliase"),
+                (&mut v.show_timers, "⏱", "Timer"),
+                (&mut v.show_vars, "📋", "Variablen"),
+                (&mut v.show_keypad, "🔢", "Ziffernblock"),
+            ] {
+                if ui.selectable_label(*flag, big(icon)).on_hover_text(tip).clicked() {
+                    *flag = !*flag;
+                }
+            }
+            ui.separator();
+            if ui.button(big("🔄")).on_hover_text("Lua-Skript neu laden").clicked() {
+                v.session.reload_script();
+            }
+            let logging = v.session.is_logging();
+            if ui
+                .selectable_label(logging, big("📝"))
+                .on_hover_text(if logging { "Log beenden" } else { "Log starten" })
+                .clicked()
+            {
+                v.session.set_logging(!logging);
+            }
+            if ui
+                .selectable_label(v.show_gmcp, big("📡"))
+                .on_hover_text("GMCP/MSDP-Daten")
+                .clicked()
+            {
+                v.show_gmcp = !v.show_gmcp;
+            }
+            if ui.button(big("🗑")).on_hover_text("Ausgabe leeren").clicked() {
+                v.session.clear_output();
+            }
+            ui.separator();
+            // Eigene Knöpfe der Welt
+            let mut fire = None;
+            for (i, b) in v.session.world.buttons.iter().enumerate() {
+                let mut r = ui.button(RichText::new(&b.label).size(15.0));
+                if !b.tooltip.is_empty() {
+                    r = r.on_hover_text(&b.tooltip);
+                }
+                if r.clicked() {
+                    fire = Some(i);
+                }
+            }
+            if let Some(i) = fire {
+                v.session.run_button(i);
+            }
+            if ui
+                .small_button("➕")
+                .on_hover_text("Eigene Knöpfe bearbeiten")
+                .clicked()
+            {
+                v.show_buttons = true;
+            }
+            if save {
+                self.save_active();
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ Update
+
+    fn update_banner(&mut self, ctx: &egui::Context) {
+        let state = self.update.lock().unwrap().clone();
+        let info = match &state {
+            UpdateState::Available(i) if !self.update_dismissed => i.clone(),
+            UpdateState::Downloading(ver) => {
+                egui::TopBottomPanel::top("update").show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Lade Version {ver} herunter …"));
+                    });
+                });
+                return;
+            }
+            UpdateState::Installing => {
+                // Setup läuft – Programm schließen, damit Dateien ersetzt werden können
+                self.save_state();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            _ => return,
+        };
+        egui::TopBottomPanel::top("update").show(ctx, |ui| {
+            ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("Welten liegen in {}", crate::world::worlds_dir().display()))
+                    RichText::new(format!(
+                        "⬆ rustmud {} ist verfügbar (installiert: {}).",
+                        info.version,
+                        updater::current_version()
+                    ))
+                    .color(Color32::LIGHT_GREEN),
+                );
+                if updater::can_auto_install(&info) {
+                    if ui.button("Jetzt aktualisieren").clicked() {
+                        self.save_state();
+                        updater::download_and_install(self.update.clone(), info.clone(), ctx.clone());
+                    }
+                } else if ui.button("Download-Seite öffnen").clicked() {
+                    updater::open_url(&info.page_url);
+                }
+                if ui.button("Was ist neu?").clicked() {
+                    self.show_about = true;
+                }
+                if ui.button("Später").clicked() {
+                    self.update_dismissed = true;
+                }
+            });
+        });
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_about;
+        egui::Window::new("Über rustmud")
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("rustmud");
+                    ui.label(format!("Version {}", updater::current_version()));
+                });
+                ui.label("Freier MUD-Client nach dem Vorbild von MUSHclient. MIT-Lizenz.");
+                ui.hyperlink_to(
+                    "github.com/areadox/Rustmud",
+                    format!("https://github.com/{}", updater::REPO),
+                );
+                ui.separator();
+                ui.heading("Updates");
+                if ui
+                    .checkbox(&mut self.settings.check_updates, "Beim Start nach Updates suchen")
+                    .changed()
+                {
+                    self.save_settings();
+                }
+                let state = self.update.lock().unwrap().clone();
+                match state {
+                    UpdateState::Idle => {}
+                    UpdateState::Checking => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Suche nach Updates …");
+                        });
+                    }
+                    UpdateState::UpToDate => {
+                        ui.label(RichText::new("✔ Du hast die neueste Version.").color(Color32::LIGHT_GREEN));
+                    }
+                    UpdateState::Available(info) => {
+                        ui.label(
+                            RichText::new(format!("Neue Version {} verfügbar.", info.version))
+                                .color(Color32::LIGHT_GREEN),
+                        );
+                        if !info.notes.trim().is_empty() {
+                            ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                ui.label(&info.notes);
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            if updater::can_auto_install(&info) {
+                                if ui.button("Jetzt aktualisieren").clicked() {
+                                    self.save_state();
+                                    updater::download_and_install(self.update.clone(), info.clone(), ctx.clone());
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new("Automatisches Update nur bei Installation über das Setup.").weak(),
+                                );
+                            }
+                            if ui.button("Release-Seite").clicked() {
+                                updater::open_url(&info.page_url);
+                            }
+                        });
+                    }
+                    UpdateState::Downloading(v) => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(format!("Lade {v} …"));
+                        });
+                    }
+                    UpdateState::Installing => {
+                        ui.label("Installation läuft …");
+                    }
+                    UpdateState::Failed(e) => {
+                        ui.label(
+                            RichText::new(format!("Update-Prüfung fehlgeschlagen: {e}")).color(Color32::LIGHT_RED),
+                        );
+                    }
+                }
+                if ui.button("Jetzt prüfen").clicked() {
+                    updater::check(self.update.clone(), ctx.clone());
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new(format!("Konfiguration: {}", config_dir().display()))
                         .weak()
                         .small(),
                 );
             });
-        if let Some((w, p)) = chosen {
-            let is_new = p.is_none();
-            self.open_world(w, p);
-            if is_new {
-                self.views[self.active].show_settings = true;
-            }
-            open = false;
+        self.show_about = open;
+    }
+
+    // ------------------------------------------------------------ Weltenverwaltung
+
+    fn world_manager(&mut self, ctx: &egui::Context) {
+        if !self.wm.open {
+            return;
         }
-        self.show_open = open;
+        if self.wm.worlds.is_none() {
+            self.wm.worlds = Some(
+                list_worlds()
+                    .into_iter()
+                    .filter_map(|(p, _)| World::load(&p).ok().map(|w| (p, w)))
+                    .collect(),
+            );
+        }
+        let mut action: Option<WmAction> = None;
+        let mut open = self.wm.open;
+        let open_paths: Vec<PathBuf> = self.views.iter().filter_map(|v| v.session.world_path.clone()).collect();
+        egui::Window::new("🌍 Weltenverwaltung")
+            .open(&mut open)
+            .default_width(640.0)
+            .show(ctx, |ui| {
+                let wm = &mut self.wm;
+                let worlds = wm.worlds.as_ref().unwrap();
+                if worlds.is_empty() {
+                    ui.label("Noch keine Welten angelegt – unten eine neue Welt anlegen.");
+                }
+                ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::Grid::new("worlds")
+                        .num_columns(4)
+                        .striped(true)
+                        .spacing([10.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Welt").strong());
+                            ui.label(RichText::new("Server").strong());
+                            ui.label(RichText::new("Zeichensatz").strong());
+                            ui.label("");
+                            ui.end_row();
+                            for (path, w) in worlds {
+                                let is_open = open_paths.contains(path);
+                                match &mut wm.rename {
+                                    Some((p, name)) if p == path => {
+                                        ui.horizontal(|ui| {
+                                            let r = ui.add(TextEdit::singleline(name).desired_width(150.0));
+                                            if ui.button("✔").clicked()
+                                                || (r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
+                                            {
+                                                action = Some(WmAction::Rename(path.clone(), name.clone()));
+                                            }
+                                        });
+                                    }
+                                    _ => {
+                                        let mut t = RichText::new(&w.name);
+                                        if is_open {
+                                            t = t.strong().color(Color32::LIGHT_GREEN);
+                                        }
+                                        ui.label(t).on_hover_text(path.display().to_string());
+                                    }
+                                }
+                                ui.label(format!("{}:{}", w.host, w.port));
+                                ui.label(match w.encoding {
+                                    Encoding::Latin1 => "Latin-1",
+                                    Encoding::Utf8 => "UTF-8",
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.button("🔌 Verbinden").clicked() {
+                                        action = Some(WmAction::Open(path.clone(), true));
+                                    }
+                                    if ui.button(if is_open { "Anzeigen" } else { "Öffnen" }).clicked() {
+                                        action = Some(WmAction::Open(path.clone(), false));
+                                    }
+                                    if ui.button("⚙").on_hover_text("Einstellungen bearbeiten").clicked() {
+                                        action = Some(WmAction::Edit(path.clone()));
+                                    }
+                                    if ui.button("✏").on_hover_text("Umbenennen").clicked() {
+                                        wm.rename = Some((path.clone(), w.name.clone()));
+                                    }
+                                    if ui.button("🗐").on_hover_text("Duplizieren").clicked() {
+                                        action = Some(WmAction::Duplicate(path.clone()));
+                                    }
+                                    if ui.button("📤").on_hover_text("Exportieren").clicked() {
+                                        action = Some(WmAction::Export(path.clone()));
+                                    }
+                                    if wm.confirm_delete.as_ref() == Some(path) {
+                                        if ui
+                                            .button(RichText::new("Wirklich löschen?").color(Color32::LIGHT_RED))
+                                            .clicked()
+                                        {
+                                            action = Some(WmAction::Delete(path.clone()));
+                                        }
+                                        if ui.button("Nein").clicked() {
+                                            wm.confirm_delete = None;
+                                        }
+                                    } else if ui.button("🗑").on_hover_text("Löschen").clicked() {
+                                        wm.confirm_delete = Some(path.clone());
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                        });
+                });
+                ui.separator();
+                ui.heading("Neue Welt");
+                egui::Grid::new("new_world")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(TextEdit::singleline(&mut wm.new_name).hint_text("z. B. MorgenGrauen"));
+                        ui.end_row();
+                        ui.label("Server");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                TextEdit::singleline(&mut wm.new_host)
+                                    .hint_text("mg.mud.de")
+                                    .desired_width(180.0),
+                            );
+                            ui.label("Port");
+                            ui.add(egui::DragValue::new(&mut wm.new_port).range(1..=65535));
+                        });
+                        ui.end_row();
+                        ui.label("Zeichensatz");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut wm.new_encoding, Encoding::Latin1, "Latin-1");
+                            ui.radio_value(&mut wm.new_encoding, Encoding::Utf8, "UTF-8");
+                        });
+                        ui.end_row();
+                    });
+                ui.horizontal(|ui| {
+                    let ok = !wm.new_name.trim().is_empty() && !wm.new_host.trim().is_empty();
+                    if ui.add_enabled(ok, Button::new("➕ Anlegen und öffnen")).clicked() {
+                        action = Some(WmAction::Create);
+                    }
+                    if ui.button("📥 Welt importieren …").clicked() {
+                        action = Some(WmAction::Import);
+                    }
+                });
+                if !wm.message.is_empty() {
+                    ui.label(RichText::new(&wm.message).weak());
+                }
+            });
+        self.wm.open = open;
+        if let Some(a) = action {
+            self.apply_wm_action(a);
+        }
+    }
+
+    fn apply_wm_action(&mut self, a: WmAction) {
+        self.wm.message.clear();
+        let result: Result<(), String> = (|| {
+            match a {
+                WmAction::Open(p, connect) => {
+                    let w = World::load(&p)?;
+                    self.open_world(w, Some(p), connect);
+                    self.wm.open = false;
+                }
+                WmAction::Edit(p) => {
+                    if self.view_index(&p).is_none() {
+                        let w = World::load(&p)?;
+                        self.open_world(w, Some(p.clone()), false);
+                    }
+                    let i = self.view_index(&p).unwrap();
+                    self.active = i;
+                    self.views[i].show_settings = true;
+                }
+                WmAction::Create => {
+                    let w = World {
+                        name: unique_name(self.wm.new_name.trim()),
+                        host: self.wm.new_host.trim().to_string(),
+                        port: self.wm.new_port,
+                        encoding: self.wm.new_encoding,
+                        ..World::default()
+                    };
+                    let p = path_for(&w);
+                    w.save(&p)?;
+                    self.wm.new_name.clear();
+                    self.wm.new_host.clear();
+                    self.open_world(w, Some(p), false);
+                    self.wm.open = false;
+                }
+                WmAction::Duplicate(p) => {
+                    let mut w = World::load(&p)?;
+                    w.name = unique_name(&w.name);
+                    w.save(&path_for(&w))?;
+                    self.wm.message = format!("Kopie „{}“ angelegt.", w.name);
+                }
+                WmAction::Rename(p, new_name) => {
+                    let new_name = new_name.trim().to_string();
+                    if new_name.is_empty() {
+                        return Err("Name darf nicht leer sein.".into());
+                    }
+                    let mut w = match self.view_index(&p) {
+                        Some(i) => {
+                            let vars = self.views[i].session.script.shared.borrow().variables.clone();
+                            self.views[i].session.world.variables = vars;
+                            self.views[i].session.world.clone()
+                        }
+                        None => World::load(&p)?,
+                    };
+                    w.name = new_name;
+                    let new_path = path_for(&w);
+                    if new_path != p && new_path.exists() {
+                        return Err("Eine Welt mit diesem Namen gibt es schon.".into());
+                    }
+                    w.save(&new_path)?;
+                    if new_path != p {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                    if let Some(i) = self.view_index(&p) {
+                        self.views[i].session.world.name = w.name.clone();
+                        self.views[i].session.world_path = Some(new_path);
+                    }
+                    self.wm.rename = None;
+                }
+                WmAction::Delete(p) => {
+                    if let Some(i) = self.view_index(&p) {
+                        self.close_view(i, false);
+                    }
+                    std::fs::remove_file(&p).map_err(|e| e.to_string())?;
+                    self.wm.confirm_delete = None;
+                }
+                WmAction::Import => {
+                    if let Some(src) = rfd::FileDialog::new().add_filter("rustmud-Welt", &["toml"]).pick_file() {
+                        let mut w = World::load(&src)?;
+                        w.name = unique_name(&w.name);
+                        w.save(&path_for(&w))?;
+                        self.wm.message = format!("„{}“ importiert.", w.name);
+                    }
+                }
+                WmAction::Export(p) => {
+                    if let Some(i) = self.view_index(&p) {
+                        self.views[i].session.save_world()?;
+                    }
+                    let w = World::load(&p)?;
+                    if let Some(dst) = rfd::FileDialog::new()
+                        .add_filter("rustmud-Welt", &["toml"])
+                        .set_file_name(w.file_name())
+                        .save_file()
+                    {
+                        w.save(&dst)?;
+                        self.wm.message = format!("Exportiert nach {}", dst.display());
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            self.wm.message = format!("Fehler: {e}");
+        }
+        self.wm.worlds = None;
     }
 }
 
@@ -272,15 +838,39 @@ fn line_job(line: &Line, font: &FontId, job: &mut LayoutJob) {
     }
 }
 
-fn status_text(s: &Session) -> RichText {
-    match s.state {
-        ConnState::Connected => RichText::new("● Verbunden").color(Color32::LIGHT_GREEN),
-        ConnState::Connecting => RichText::new("● Verbinde …").color(Color32::YELLOW),
-        ConnState::Disconnected => RichText::new("● Getrennt").color(Color32::LIGHT_RED),
+fn state_color(s: ConnState) -> Color32 {
+    match s {
+        ConnState::Connected => Color32::LIGHT_GREEN,
+        ConnState::Connecting => Color32::YELLOW,
+        ConnState::Disconnected => Color32::from_rgb(230, 90, 90),
     }
 }
 
+/// Farbiger Statuspunkt (die Standardschrift hat kein „●“).
+fn status_dot(ui: &mut egui::Ui, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.5, color);
+}
+
+fn status_text(s: &Session) -> RichText {
+    let text = match s.state {
+        ConnState::Connected => "Verbunden",
+        ConnState::Connecting => "Verbinde …",
+        ConnState::Disconnected => "Getrennt",
+    };
+    RichText::new(text).color(state_color(s.state))
+}
+
+fn input_id(active: usize) -> egui::Id {
+    egui::Id::new(("input", active))
+}
+
 impl eframe::App for MudApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let empty = self.views.get(self.active).is_none_or(|v| v.input.is_empty());
+        crate::keypad::fallback_filter(raw_input, empty);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut next = std::time::Duration::from_millis(250);
         for v in &mut self.views {
@@ -289,18 +879,33 @@ impl eframe::App for MudApp {
         }
         ctx.request_repaint_after(next);
 
+        // Ziffernblock: nur wenn Eingabezeile oder nichts den Fokus hat
+        let focused = ctx.memory(|m| m.focused());
+        let keypad_ok = focused.is_none() || focused == Some(input_id(self.active));
+        let enabled = self
+            .views
+            .get(self.active)
+            .is_some_and(|v| v.session.world.keypad_enabled);
+        crate::keypad::set_active(enabled, keypad_ok);
+        let keys = crate::keypad::take();
+        if let Some(v) = self.views.get_mut(self.active) {
+            for k in keys {
+                v.session.keypad(k);
+            }
+        }
+
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             self.menu_bar(ui);
+            if self.settings.show_toolbar {
+                ui.separator();
+                self.toolbar(ui);
+            }
             if !self.views.is_empty() {
+                ui.separator();
                 ui.horizontal(|ui| {
                     let mut close = None;
                     for (i, v) in self.views.iter().enumerate() {
-                        let color = match v.session.state {
-                            ConnState::Connected => Color32::LIGHT_GREEN,
-                            ConnState::Connecting => Color32::YELLOW,
-                            ConnState::Disconnected => Color32::GRAY,
-                        };
-                        ui.label(RichText::new("●").color(color));
+                        status_dot(ui, state_color(v.session.state));
                         if ui.selectable_label(i == self.active, &v.session.world.name).clicked() {
                             self.active = i;
                         }
@@ -310,25 +915,33 @@ impl eframe::App for MudApp {
                         ui.separator();
                     }
                     if let Some(i) = close {
-                        self.close_view(i);
+                        self.close_view(i, true);
                     }
                 });
             }
         });
+        self.update_banner(ctx);
+        self.world_manager(ctx);
+        self.about_window(ctx);
 
-        if self.show_open || self.views.is_empty() {
-            if self.views.is_empty() {
-                self.show_open = true;
-            }
-            self.open_dialog(ctx);
-        }
         let Some(v) = self.views.get_mut(self.active) else {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.centered_and_justified(|ui| {
+                    if ui
+                        .button(RichText::new("🌍 Welt öffnen oder anlegen").size(20.0))
+                        .clicked()
+                    {
+                        self.wm.open = true;
+                    }
+                });
+            });
             return;
         };
         let font = FontId::monospace(v.session.world.font_size);
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                status_dot(ui, state_color(v.session.state));
                 ui.label(status_text(&v.session));
                 ui.separator();
                 ui.label(format!("{}:{}", v.session.world.host, v.session.world.port));
@@ -344,32 +957,22 @@ impl eframe::App for MudApp {
                     ui.separator();
                     ui.label("MSDP");
                 }
+                if v.session.is_logging() {
+                    ui.separator();
+                    ui.label("LOG");
+                }
                 ui.separator();
                 ui.label(format!("{} Zeilen", v.session.lines.len()));
                 if !self.status.is_empty() {
                     ui.separator();
                     ui.label(RichText::new(&self.status).weak());
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    match v.session.state {
-                        ConnState::Disconnected => {
-                            if ui.button("Verbinden").clicked() {
-                                v.session.connect();
-                            }
-                        }
-                        _ => {
-                            if ui.button("Trennen").clicked() {
-                                v.session.disconnect();
-                            }
-                        }
-                    }
-                });
             });
         });
 
         // ---------------------------------------------------- Eingabezeile
         egui::TopBottomPanel::bottom("input").show(ctx, |ui| {
-            let id = egui::Id::new(("input", self.active));
+            let id = input_id(self.active);
             let focused = ctx.memory(|m| m.has_focus(id));
             let mut hist_changed = false;
             if focused && !v.history.is_empty() {
@@ -507,6 +1110,7 @@ impl eframe::App for MudApp {
         // ---------------------------------------------------- Dialoge
         let title = v.session.world.name.clone();
         let mut reload = false;
+        let mut save = false;
         egui::Window::new(format!("Einstellungen – {title}"))
             .id(egui::Id::new(("settings", self.active)))
             .open(&mut v.show_settings)
@@ -515,10 +1119,7 @@ impl eframe::App for MudApp {
                 reload = ui_editors::world_settings(ui, &mut v.session);
                 ui.separator();
                 if ui.button("💾 Welt speichern").clicked() {
-                    self.status = match v.session.save_world() {
-                        Ok(p) => format!("Gespeichert: {}", p.display()),
-                        Err(e) => format!("Fehler: {e}"),
-                    };
+                    save = true;
                 }
             });
         if reload {
@@ -544,6 +1145,19 @@ impl eframe::App for MudApp {
             .open(&mut v.show_vars)
             .default_width(420.0)
             .show(ctx, |ui| ui_editors::variables(ui, &mut v.session, &mut v.vars));
+        egui::Window::new(format!("Ziffernblock – {title}"))
+            .id(egui::Id::new(("keypad", self.active)))
+            .open(&mut v.show_keypad)
+            .default_width(420.0)
+            .show(ctx, |ui| ui_editors::keypad(ui, &mut v.session));
+        egui::Window::new(format!("Eigene Knöpfe – {title}"))
+            .id(egui::Id::new(("buttons", self.active)))
+            .open(&mut v.show_buttons)
+            .default_width(460.0)
+            .show(ctx, |ui| ui_editors::buttons(ui, &mut v.session, &mut v.button_sel));
+        if save {
+            self.save_active();
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

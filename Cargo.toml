@@ -10,7 +10,7 @@ homepage = "https://github.com/areadox/Rustmud"
 readme = "README.md"
 keywords = ["mud", "telnet", "client", "lua", "mushclient"]
 categories = ["games", "network-programming", "gui"]
-exclude = [".github/", "target/"]
+exclude = [".github/", "target/", "installer/"]
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
@@ -24,6 +24,20 @@ toml = "0.8"
 jiff = "0.2"
 directories = "5"
 encoding_rs = "0.8"
+ureq = { version = "2", features = ["json", "native-certs"] }
+rfd = "0.15"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

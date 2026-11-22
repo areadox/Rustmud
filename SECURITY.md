@@ -17,3 +17,9 @@ Du erhältst in der Regel innerhalb einer Woche eine Rückmeldung.
 
 Lua-Skripte laufen mit vollen Rechten des Benutzers (inklusive `io` und `os`), genau wie bei
 MUSHclient. Lade nur Skripte, denen du vertraust.
+
+## Hinweis zur Update-Funktion
+
+Die Update-Prüfung fragt ausschließlich die GitHub-API dieses Repositorys über HTTPS ab
+(`api.github.com/repos/areadox/Rustmud/releases/latest`) und lädt nur die dort veröffentlichte
+Datei `rustmud-setup-x64.exe` herunter. Es werden keine Nutzungsdaten übertragen.

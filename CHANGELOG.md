@@ -17,6 +17,11 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 - Lua-5.4-Scripting mit MUSHclient-ähnlicher API
 - Befehlstrenner, Speedwalk, Lua in der Eingabezeile, Befehlshistorie
 - Logging, GMCP/MSDP-Inspektor, automatisches (Neu-)Verbinden
+- Weltenverwaltung im Programm (anlegen, öffnen, bearbeiten, umbenennen, duplizieren, löschen, Import/Export)
+- Icon-Leiste mit allen Funktionen und eigenen Knöpfen pro Welt
+- Ziffernblock zum Laufen, frei belegbar (unter Windows exakte Erkennung)
+- Windows-Installer (NSIS, ohne Adminrechte) und Update-Funktion über GitHub-Releases
+- Programmsymbol
 
 [Unveröffentlicht]: https://github.com/areadox/Rustmud/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/areadox/Rustmud/releases/tag/v0.0.1

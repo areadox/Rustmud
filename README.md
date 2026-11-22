@@ -18,7 +18,11 @@ Läuft unter Windows, Linux und macOS.
 - **MCCP2** (Kompression), **GMCP** und **MSDP**, NAWS (Fenstergröße) und TTYPE/MTTS
 - **ANSI-Farben**: 16 Farben, 256 Farben und Truecolor sowie fett, kursiv, unterstrichen und invers
 - **Zeichensatz** pro Welt: Latin-1 (Standard, passend für die meisten deutschen MUDs) oder UTF-8
-- **Mehrere Welten** gleichzeitig als Tabs; jede Welt wird als TOML-Datei gespeichert
+- **Weltenverwaltung im Programm**: Welten anlegen, öffnen, verbinden, bearbeiten, umbenennen, duplizieren,
+  löschen, importieren und exportieren; mehrere Welten gleichzeitig als Tabs
+- **Icon-Leiste** für alle wichtigen Funktionen plus **eigene Knöpfe** pro Welt (z. B. „⚔ Angriff“ → `toete @ziel`)
+- **Ziffernblock zum Laufen**, pro Welt frei belegbar (Standard: deutsche Richtungen n, no, o, so, s, sw, w, nw, ob, u)
+- **Installer für Windows** und **Update-Funktion**: rustmud prüft beim Start auf neue Versionen und aktualisiert sich auf Wunsch selbst
 - **Trigger** mit Wildcard (`*`) oder Regex, Umfärben, Zeile unterdrücken, Einmal-Triggern, Reihenfolge, Gruppen und Testfeld im Editor
 - **Aliase** und **Timer** (auch einmalig oder nur bei bestehender Verbindung)
 - **Variablen** (`@name` in Triggern und Aliassen, `GetVariable`/`SetVariable` in Lua)
@@ -27,10 +31,24 @@ Läuft unter Windows, Linux und macOS.
 - GMCP/MSDP-Inspektor als Seitenleiste
 - Befehlshistorie mit ↑/↓, automatisches Verbinden beim Öffnen und automatisches Neuverbinden
 
-## Download
+## Download und Installation
 
-Fertige Programme für Windows, Linux und macOS gibt es unter [Releases](https://github.com/areadox/Rustmud/releases).
-Archiv entpacken und `rustmud` bzw. `rustmud.exe` starten – eine Installation ist nicht nötig.
+Fertige Programme gibt es unter [Releases](https://github.com/areadox/Rustmud/releases):
+
+| Datei | Beschreibung |
+|-------|--------------|
+| `rustmud-setup-x64.exe` | **Windows-Installer** (empfohlen) – installiert ohne Adminrechte nach `%LOCALAPPDATA%\Programs\rustmud`, mit Startmenü-Eintrag, optionaler Desktop-Verknüpfung und Deinstallation über „Apps & Features“ |
+| `rustmud-windows-x64.zip` | Windows ohne Installation (portabel) |
+| `rustmud-linux-x64.tar.gz` | Linux |
+| `rustmud-macos-arm64.tar.gz` | macOS (Apple Silicon) |
+
+### Updates
+
+rustmud prüft beim Start, ob es auf GitHub eine neuere Version gibt (abschaltbar unter **Hilfe → Über rustmud**).
+Bei einer Installation über den Windows-Installer genügt dann ein Klick auf **„Jetzt aktualisieren“**:
+Das neue Setup wird heruntergeladen, still installiert und rustmud danach neu gestartet.
+Bei der portablen Version und unter Linux/macOS öffnet sich stattdessen die Download-Seite.
+Welten, Skripte und Logs bleiben bei Updates und bei der Deinstallation erhalten.
 
 ## Selbst bauen
 
@@ -49,10 +67,46 @@ cargo test
 
 ## Erste Schritte
 
-1. Programm starten → **Welt öffnen / Neu …** → **Neue Welt**
-2. Name, Host und Port eintragen, z. B. MorgenGrauen: `mg.mud.de`, Port `4711`
-3. Zeichensatz wählen (Latin-1 für die meisten deutschen MUDs)
-4. **Verbinden** unten rechts
+1. rustmud starten – die **Weltenverwaltung** (🌍) öffnet sich automatisch
+2. Unter „Neue Welt“ Name, Server und Port eintragen, z. B. MorgenGrauen: `mg.mud.de`, Port `4711`
+3. Zeichensatz wählen (Latin-1 für die meisten deutschen MUDs) und **Anlegen und öffnen**
+4. In der Icon-Leiste auf 🔌 **Verbinden** klicken
+
+## Bedienung
+
+### Icon-Leiste
+
+| Symbol | Funktion |
+|--------|----------|
+| 🌍 | Weltenverwaltung |
+| 🔌 / ⏏ | Verbinden / Trennen |
+| 💾 | Welt speichern |
+| ⚙ ⚡ ⌨ ⏱ 📋 🔢 | Einstellungen, Trigger, Aliase, Timer, Variablen, Ziffernblock |
+| 🔄 | Lua-Skript neu laden |
+| 📝 | Log starten/beenden |
+| 📡 | GMCP/MSDP-Daten anzeigen |
+| 🗑 | Ausgabe leeren |
+| ➕ | eigene Knöpfe anlegen und bearbeiten |
+
+Eigene Knöpfe erscheinen rechts daneben. Sie können einen Befehl senden, wie eine Eingabe ausgeführt werden
+(mit Aliassen, `;` und Speedwalk), Lua-Code ausführen oder eine Notiz ausgeben.
+Die Leiste lässt sich unter **Ansicht → Icon-Leiste** ausblenden.
+
+### Ziffernblock
+
+Unter 🔢 **Ziffernblock** wird jede Taste des Ziffernblocks mit einem Befehl belegt (auch mehrere mit `;`).
+
+| | | | |
+|---|---|---|---|
+| | `/` | `*` | `-` ob |
+| `7` nw | `8` n | `9` no | `+` u |
+| `4` w | `5` schau | `6` o | |
+| `1` sw | `2` s | `3` so | |
+| `0` | | `.` | |
+
+Unter **Windows** werden die Ziffernblock-Tasten exakt erkannt (NumLock an oder aus) – die normalen Zifferntasten
+schreiben weiterhin Zahlen. Auf Linux/macOS lässt sich der Ziffernblock nicht unterscheiden; dort wirkt die Belegung
+für 0–9 und `+`, solange die Eingabezeile leer ist. Beim Tippen in Dialogfeldern ist der Ziffernblock nicht aktiv.
 
 Welten liegen im Konfigurationsordner:
 
@@ -141,13 +195,16 @@ Ein Beispielskript liegt unter [`beispiele/beispiel.lua`](beispiele/beispiel.lua
 | `automation.rs` | Mustervergleich, Platzhalter, Speedwalk, Befehlstrenner |
 | `scripting.rs` | Lua-Einbindung (mlua) und API |
 | `world.rs` | Welt-Dateien (TOML) |
-| `app.rs`, `ui_editors.rs` | Oberfläche |
+| `keypad.rs` | Ziffernblock-Erkennung (Windows: Fenster-Subclassing) |
+| `updater.rs` | Update-Prüfung und -Installation über GitHub-Releases |
+| `app.rs`, `ui_editors.rs` | Oberfläche, Icon-Leiste, Weltenverwaltung, Dialoge |
+| `installer/rustmud.nsi` | Windows-Installer (NSIS) |
 
 ## Geplant
 
 - Mini-Windows (eigene Zeichenflächen aus Lua, wie `WindowCreate` bei MUSHclient)
 - MXP, Plugins und Import von MUSHclient-Welten (`.mcl`)
-- Ziffernblock für Richtungen, Suche in der Ausgabe
+- Suche in der Ausgabe, mehrere Ausgabefenster
 
 Ideen und Fehler gerne als [Issue](https://github.com/areadox/Rustmud/issues) melden.
 
@@ -163,7 +220,7 @@ Sicherheitslücken bitte vertraulich melden, siehe [SECURITY.md](SECURITY.md).
 rustmud steht unter der [MIT-Lizenz](LICENSE) – du darfst es frei benutzen, verändern und weitergeben.
 
 Die verwendeten Bibliotheken (u. a. egui, mlua mit Lua 5.4, regex, flate2) stehen unter MIT-kompatiblen
-Lizenzen (MIT, Apache-2.0, Zlib, BSD u. a.); das wird in der CI mit [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) geprüft.
+Lizenzen (MIT, Apache-2.0, Zlib, BSD, CDLA-Permissive u. a.); das wird in der CI mit [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) geprüft.
 
 rustmud ist ein eigenständiges Projekt und steht in keiner Verbindung zu MUSHclient oder dessen Autor Nick Gammon.
 Es wurde kein Code aus MUSHclient übernommen; lediglich Bedienkonzept und Namen der Lua-Funktionen sind angelehnt.

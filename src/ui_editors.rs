@@ -2,7 +2,7 @@
 
 use crate::automation::compile;
 use crate::session::Session;
-use crate::world::{Alias, Encoding, SendTo, Timer, Trigger};
+use crate::world::{default_keypad, Alias, Encoding, SendTo, Timer, Trigger, UserButton};
 use egui::{ComboBox, DragValue, Grid, RichText, ScrollArea, TextEdit, Ui};
 
 #[derive(Default)]
@@ -42,7 +42,7 @@ where
             changed = true;
         }
         let has_sel = st.selected.is_some_and(|i| i < items.len());
-        if ui.add_enabled(has_sel, egui::Button::new("⧉ Kopieren")).clicked() {
+        if ui.add_enabled(has_sel, egui::Button::new("🗐 Kopieren")).clicked() {
             let i = st.selected.unwrap();
             let c = items[i].clone();
             items.insert(i + 1, c);
@@ -129,7 +129,7 @@ fn pattern_check(ui: &mut Ui, pattern: &str, regex: bool, ignore_case: bool, tes
                         );
                     }
                     None => {
-                        ui.label(RichText::new("✘ kein Treffer").color(egui::Color32::LIGHT_RED));
+                        ui.label(RichText::new("❌ kein Treffer").color(egui::Color32::LIGHT_RED));
                     }
                 }
             }
@@ -515,11 +515,18 @@ pub fn world_settings(ui: &mut Ui, s: &mut Session) -> bool {
             });
             ui.end_row();
             ui.label("Log-Ordner");
-            ui.add(
-                TextEdit::singleline(&mut w.log_dir)
-                    .hint_text(crate::world::default_log_dir().display().to_string())
-                    .desired_width(280.0),
-            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    TextEdit::singleline(&mut w.log_dir)
+                        .hint_text(crate::world::default_log_dir().display().to_string())
+                        .desired_width(240.0),
+                );
+                if ui.button("…").on_hover_text("Ordner auswählen").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                        w.log_dir = p.display().to_string();
+                    }
+                }
+            });
             ui.end_row();
         });
     });
@@ -559,5 +566,124 @@ pub fn json_tree(ui: &mut Ui, key: &str, v: &serde_json::Value, id: &str) {
                 ui.label(RichText::new(text).monospace());
             });
         }
+    }
+}
+
+/// Ziffernblock-Belegung, angeordnet wie auf der Tastatur.
+pub fn keypad(ui: &mut Ui, s: &mut Session) {
+    let w = &mut s.world;
+    ui.checkbox(&mut w.keypad_enabled, "Mit dem Ziffernblock laufen");
+    ui.add_space(4.0);
+    ui.add_enabled_ui(w.keypad_enabled, |ui| {
+        Grid::new("keypad").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
+            // Reihen wie auf einem Ziffernblock: / * -  |  7 8 9 +  |  4 5 6  |  1 2 3  |  0 .
+            let rows: [&[&str]; 5] = [
+                &["", "/", "*", "-"],
+                &["7", "8", "9", "+"],
+                &["4", "5", "6", ""],
+                &["1", "2", "3", ""],
+                &["0", "", ".", ""],
+            ];
+            for row in rows {
+                for key in row {
+                    if key.is_empty() {
+                        ui.label("");
+                        continue;
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(*key).strong().monospace());
+                        let v = w.keypad.entry(key.to_string()).or_default();
+                        ui.add(TextEdit::singleline(v).desired_width(80.0));
+                    });
+                }
+                ui.end_row();
+            }
+        });
+    });
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Standard (deutsch) wiederherstellen").clicked() {
+            w.keypad = default_keypad();
+        }
+    });
+    let hint = if crate::keypad::native_supported() {
+        "Die Tasten wirken nur auf dem Ziffernblock (NumLock an oder aus), die normalen Zifferntasten tippen weiter Zahlen. \
+         Mehrere Befehle mit ; trennen; Aliase werden ausgewertet."
+    } else {
+        "Auf diesem System lässt sich der Ziffernblock nicht von den Zifferntasten unterscheiden: \
+         Die Belegung wirkt, wenn die Eingabezeile leer ist (Ziffern 0–9 und +)."
+    };
+    ui.label(RichText::new(hint).weak());
+}
+
+/// Eigene Knöpfe der Icon-Leiste.
+pub fn buttons(ui: &mut Ui, s: &mut Session, sel: &mut Option<usize>) {
+    let b = &mut s.world.buttons;
+    ui.horizontal(|ui| {
+        if ui.button("➕ Neu").clicked() {
+            b.push(UserButton::default());
+            *sel = Some(b.len() - 1);
+        }
+        let has = sel.is_some_and(|i| i < b.len());
+        if ui
+            .add_enabled(has, egui::Button::new("⬅"))
+            .on_hover_text("nach links")
+            .clicked()
+        {
+            let i = sel.unwrap();
+            if i > 0 {
+                b.swap(i, i - 1);
+                *sel = Some(i - 1);
+            }
+        }
+        if ui
+            .add_enabled(has, egui::Button::new("➡"))
+            .on_hover_text("nach rechts")
+            .clicked()
+        {
+            let i = sel.unwrap();
+            if i + 1 < b.len() {
+                b.swap(i, i + 1);
+                *sel = Some(i + 1);
+            }
+        }
+        if ui.add_enabled(has, egui::Button::new("🗑 Löschen")).clicked() {
+            let i = sel.unwrap();
+            b.remove(i);
+            *sel = if b.is_empty() { None } else { Some(i.min(b.len() - 1)) };
+        }
+    });
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        for (i, btn) in b.iter().enumerate() {
+            if ui.selectable_label(*sel == Some(i), &btn.label).clicked() {
+                *sel = Some(i);
+            }
+        }
+    });
+    ui.separator();
+    if let Some(btn) = sel.and_then(|i| b.get_mut(i)) {
+        Grid::new("btn").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label("Beschriftung");
+            ui.text_edit_singleline(&mut btn.label);
+            ui.end_row();
+            ui.label("Tooltip");
+            ui.text_edit_singleline(&mut btn.tooltip);
+            ui.end_row();
+            ui.label("Befehl");
+            ui.add(
+                TextEdit::multiline(&mut btn.send)
+                    .code_editor()
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.end_row();
+            ui.label("Senden an");
+            send_to_combo(ui, "btn_send_to", &mut btn.send_to);
+            ui.end_row();
+        });
+        ui.label(RichText::new("Beschriftung darf auch ein Symbol sein, z. B. ⚔ 🛡 🍺 ❤ ✨ ☠ 🏠").weak());
+    } else {
+        ui.label(RichText::new("Eigene Knöpfe erscheinen rechts in der Icon-Leiste. Mit „Neu“ anlegen.").weak());
     }
 }
