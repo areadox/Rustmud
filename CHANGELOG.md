@@ -6,6 +6,10 @@ die Versionierung [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unveröffentlicht]
 
+### Hinzugefügt
+- Seitenansicht: jeder neue Raum (oder wahlweise jeder Befehl) beginnt oben im Ausgabefenster, der Verlauf
+  erscheint beim Hochscrollen; Lua-Funktion SetPageStart(); Plugin Karte 1.1.0 markiert den Raumbeginn
+
 ## [0.0.2] – 2026-11-23
 
 ### Hinzugefügt

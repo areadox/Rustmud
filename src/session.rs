@@ -8,7 +8,7 @@ use crate::net::{Connection, NetEvent};
 use crate::plugins::{PluginInstance, PluginMeta};
 use crate::scripting::{error_style, note_style, Action, LineHook, ScriptEngine, WinItem};
 use crate::telnet::{escape_iac, naws_packet, TelnetConfig, TelnetEvent};
-use crate::world::{default_log_dir, worlds_dir, Encoding, SendTo, World};
+use crate::world::{default_log_dir, worlds_dir, Encoding, PageMode, SendTo, World};
 use encoding_rs::{Decoder, UTF_8, WINDOWS_1252};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, VecDeque};
@@ -51,6 +51,12 @@ pub struct Session {
     pub gmcp_tree: Value,
     pub msdp_tree: Map<String, Value>,
     pub output_version: u64,
+    /// Anzahl bereits verworfener Zeilen vorne im Puffer (für absolute Zeilennummern)
+    pub lines_base: u64,
+    /// Absolute Zeilennummer, an der die aktuelle Seite beginnt (Seitenansicht)
+    pub page_anchor: Option<u64>,
+    /// Zählt neue Seiten – die Oberfläche springt dann wieder mit
+    pub page_version: u64,
     pub term_size: (u16, u16),
     pub script: ScriptEngine,
     pub plugins: Vec<PluginInstance>,
@@ -99,6 +105,9 @@ impl Session {
             gmcp_tree: Value::Object(Map::new()),
             msdp_tree: Map::new(),
             output_version: 0,
+            lines_base: 0,
+            page_anchor: None,
+            page_version: 0,
             term_size: (80, 24),
             script,
             plugins: Vec::new(),
@@ -153,13 +162,31 @@ impl Session {
         let max = self.world.max_lines.max(100);
         while self.lines.len() > max {
             self.lines.pop_front();
+            self.lines_base += 1;
         }
         self.output_version += 1;
     }
 
     pub fn clear_output(&mut self) {
+        self.lines_base += self.lines.len() as u64;
         self.lines.clear();
+        self.page_anchor = None;
         self.output_version += 1;
+    }
+
+    /// Die nächste Ausgabezeile beginnt eine neue Seite.
+    pub fn mark_page_start(&mut self) {
+        self.page_anchor = Some(self.lines_base + self.lines.len() as u64);
+        self.page_version += 1;
+    }
+
+    /// Beginn der aktuellen Seite als Index in `lines` (nur in der Seitenansicht).
+    pub fn page_start_index(&self) -> Option<usize> {
+        if self.world.page_mode == PageMode::Aus {
+            return None;
+        }
+        let a = self.page_anchor?.checked_sub(self.lines_base)? as usize;
+        (a <= self.lines.len()).then_some(a)
     }
 
     // ------------------------------------------------------------ Einstellungen
@@ -503,9 +530,14 @@ impl Session {
         }
         // Von Plugins zurückgehaltene Zeilen (EmitLine) erscheinen vor der aktuellen Zeile
         if !self.plugins.is_empty() {
-            let emits: Vec<Line> = self.plugins.iter().flat_map(|p| p.engine.take_emits()).collect();
-            for l in emits {
-                self.push_output(l);
+            let pre: Vec<Action> = self.plugins.iter().flat_map(|p| p.engine.take_emits()).collect();
+            for a in pre {
+                match a {
+                    Action::EmitLine(l) => self.push_output(l),
+                    Action::PageStart if self.world.page_mode == PageMode::Raum => self.mark_page_start(),
+                    Action::PageStart => {}
+                    _ => {}
+                }
             }
         }
         let plain = line.plain();
@@ -565,6 +597,10 @@ impl Session {
         if input.is_empty() {
             self.send_world("", true);
             return;
+        }
+        if self.world.page_mode == PageMode::Befehl {
+            // Die Zeile mit dem Befehl (ggf. hinter dem Prompt) beginnt die neue Seite
+            self.mark_page_start();
         }
         for line in input.split('\n') {
             self.execute(line.trim_end_matches('\r'), 0);
@@ -835,6 +871,8 @@ impl Session {
                         }
                     }
                     Action::EmitLine(l) => self.push_output(l),
+                    Action::PageStart if self.world.page_mode == PageMode::Raum => self.mark_page_start(),
+                    Action::PageStart => {}
                     Action::Send(t) => {
                         for l in t.lines() {
                             self.send_world(l, true);
@@ -1025,6 +1063,28 @@ mod tests {
         s.save_world_vars_for_test();
         assert_eq!(s.world.plugin_vars["t"]["n"], "1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn page_anchor_survives_trimming() {
+        let w = World {
+            max_lines: 100,
+            page_mode: PageMode::Befehl,
+            ..World::default()
+        };
+        let mut s = Session::new(w, None, Arc::new(|| {}));
+        for i in 0..150 {
+            s.on_data(format!("Zeile {i}\r\n").as_bytes());
+        }
+        s.mark_page_start();
+        s.on_data(b"Neuer Raum\r\nText\r\n");
+        for i in 0..20 {
+            s.on_data(format!("x{i}\r\n").as_bytes());
+        }
+        let a = s.page_start_index().unwrap();
+        assert_eq!(s.lines[a].plain(), "Neuer Raum");
+        s.world.page_mode = PageMode::Aus;
+        assert_eq!(s.page_start_index(), None);
     }
 
     #[test]

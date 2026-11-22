@@ -489,6 +489,15 @@ pub fn world_settings(ui: &mut Ui, s: &mut Session) -> bool {
             ui.label("Schriftgröße");
             ui.add(DragValue::new(&mut w.font_size).range(8.0..=40.0).speed(0.5));
             ui.end_row();
+            ui.label("Seitenansicht");
+            ComboBox::from_id_salt("page_mode")
+                .selected_text(w.page_mode.label())
+                .show_ui(ui, |ui| {
+                    for m in crate::world::PageMode::ALL {
+                        ui.selectable_value(&mut w.page_mode, m, m.label());
+                    }
+                });
+            ui.end_row();
             ui.label("Max. Zeilen");
             ui.add(DragValue::new(&mut w.max_lines).range(100..=1_000_000).speed(100));
             ui.end_row();

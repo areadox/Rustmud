@@ -42,6 +42,8 @@ pub enum Action {
     WindowOption(String, String, String),
     /// Zeile in der Ausgabe anzeigen, ohne Log und Trigger (z. B. zurückgehaltene Zeilen)
     EmitLine(Line),
+    /// Die nächste Ausgabezeile beginnt eine neue Seite (Seitenansicht)
+    PageStart,
     Send(String),
     Execute(String),
     Note(Line),
@@ -102,13 +104,13 @@ impl ScriptEngine {
         self.shared.borrow_mut().actions.push(a);
     }
 
-    /// Nimmt nur die zurückgehaltenen Ausgabezeilen (EmitLine) aus der Warteschlange.
-    pub fn take_emits(&self) -> Vec<Line> {
+    /// Nimmt Aktionen, die vor der aktuellen Zeile wirken müssen (EmitLine, PageStart), aus der Warteschlange.
+    pub fn take_emits(&self) -> Vec<Action> {
         let mut sh = self.shared.borrow_mut();
         let mut out = Vec::new();
         sh.actions.retain(|a| match a {
-            Action::EmitLine(l) => {
-                out.push(l.clone());
+            Action::EmitLine(_) | Action::PageStart => {
+                out.push(a.clone());
                 false
             }
             _ => true,
@@ -300,6 +302,11 @@ impl ScriptEngine {
         let s = self.shared.clone();
         func!("AnsiNote", move |_, text: String| {
             s.borrow_mut().actions.push(Action::Note(Line::from_ansi(&text)));
+            Ok(())
+        });
+        let s = self.shared.clone();
+        func!("SetPageStart", move |_, ()| {
+            s.borrow_mut().actions.push(Action::PageStart);
             Ok(())
         });
         let s = self.shared.clone();

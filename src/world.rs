@@ -156,6 +156,30 @@ impl Default for Timer {
     }
 }
 
+/// Seitenansicht der Ausgabe: wo eine neue „Seite“ beginnt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PageMode {
+    /// Immer ans Ende scrollen (klassisch)
+    Aus,
+    /// Jeder eigene Befehl beginnt eine neue Seite
+    Befehl,
+    /// Jeder neue Raum beginnt eine neue Seite (Plugin ruft SetPageStart(), z. B. „Karte“)
+    #[default]
+    Raum,
+}
+
+impl PageMode {
+    pub const ALL: [PageMode; 3] = [PageMode::Raum, PageMode::Befehl, PageMode::Aus];
+    pub fn label(&self) -> &'static str {
+        match self {
+            PageMode::Aus => "Aus – immer ans Ende scrollen",
+            PageMode::Befehl => "Neue Seite bei jedem Befehl",
+            PageMode::Raum => "Neue Seite bei jedem Raum",
+        }
+    }
+}
+
 /// Eigener Knopf in der Icon-Leiste.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -228,6 +252,8 @@ pub struct World {
     pub script_prefix: String,
     pub echo_input: bool,
     pub max_lines: usize,
+    /// Seitenansicht: nur die aktuelle Raumausgabe sichtbar, Verlauf beim Hochscrollen
+    pub page_mode: PageMode,
     pub font_size: f32,
     pub auto_reconnect: bool,
     /// Beim Öffnen der Welt sofort verbinden
@@ -267,6 +293,7 @@ impl Default for World {
             script_prefix: "/".into(),
             echo_input: true,
             max_lines: 20_000,
+            page_mode: PageMode::Raum,
             font_size: 14.0,
             auto_reconnect: false,
             auto_connect: false,

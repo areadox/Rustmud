@@ -409,6 +409,9 @@ mod tests {
         assert_eq!(map.len(), 5);
         assert_eq!(map[2], "|#(N)-[X]-( )-|");
         assert!(s.window_requests.contains(&"karte".to_string()));
+        // Seitenansicht: der Raum beginnt mit der ersten Textzeile neben der Karte
+        let a = s.page_start_index().expect("Seitenbeginn gesetzt");
+        assert_eq!(s.lines[a].plain(), "Hier bist Du nun also am Eingang der");
         // größere Karte
         let big = format!(
             "+{0}+ Text\n{1}+{0}+\n",

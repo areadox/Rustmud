@@ -22,6 +22,8 @@ Läuft unter Windows, Linux und macOS.
   löschen, importieren und exportieren; mehrere Welten gleichzeitig als Tabs
 - **Frei anordnbare Fenster**: Ausgabe, Karte, Spielstand, Trigger, Einstellungen usw. lassen sich per Drag & Drop
   nebeneinander, untereinander, als Tabs oder als frei schwebende Fenster anordnen; die Anordnung wird gespeichert
+- **Seitenansicht**: in der Ausgabe steht immer nur der aktuelle Raum oben im Fenster, der Verlauf erscheint beim
+  Hochscrollen
 - **Mitgelieferte Plugins**: **Karte** (ASCII-Karte neben dem Raumtext in ein eigenes Fenster) und **Spielstand**
   (Spielstand-Tabelle als übersichtliches Fenster mit Balken), dazu das Beispiel **LP-Warnung**
 - **Plugins**: eigenständige Lua-Erweiterungen mit eigenem Zustand, pro Welt aktivierbar, mit **Plugin-Manager**
@@ -112,6 +114,23 @@ Spielstand …) liegen in einem frei einteilbaren Fensterbereich:
   wiederhergestellt. **Ansicht → Fensteranordnung zurücksetzen** stellt den Ausgangszustand wieder her.
 
 Die Inhalte der Fenster beziehen sich immer auf die oben gewählte Welt.
+
+### Seitenansicht
+
+Damit die Ausgabe nicht ständig durchrollt, beginnt mit jedem neuen Raum eine neue „Seite“: Die Raumbeschreibung
+steht oben im Ausgabefenster, alles Vorherige liegt darüber und erscheint erst beim **Hochscrollen**. Was danach noch
+kommt (Gespräche, Kampf …), läuft unter dem Raum weiter; reicht der Platz nicht, scrollt die Ausgabe wie gewohnt mit.
+Scrollt man hoch, bleibt die Ansicht stehen, bis man wieder nach unten scrollt oder einen Befehl eingibt.
+
+Einstellbar unter **Einstellungen → Ausgabe → Seitenansicht**:
+
+| Modus | Neue Seite beginnt … |
+|-------|----------------------|
+| Neue Seite bei jedem Raum (Standard) | wenn ein Plugin einen neuen Raum meldet – das mitgelieferte Plugin **Karte** tut das bei jeder Karte |
+| Neue Seite bei jedem Befehl | mit jedem eingegebenen Befehl |
+| Aus | nie – die Ausgabe scrollt klassisch immer ans Ende |
+
+Eigene Plugins und Skripte können mit `SetPageStart()` selbst einen Seitenbeginn setzen.
 
 ### Mitgelieferte Plugins: Karte und Spielstand
 
@@ -297,6 +316,7 @@ Plugins können eigene Fenster anlegen, die wie alle anderen frei angeordnet wer
 | `AnsiStrip(text)`, `AnsiLen(text)`, `AnsiSub(text, start, länge)` | Farbcodes entfernen, Länge, Teilstück mit Farben |
 | `AnsiNote(text)` | farbige Notiz in der Ausgabe |
 | `EmitLine(text)` | zurückgehaltene Zeile in der Ausgabe anzeigen (ohne Log/Trigger) |
+| `SetPageStart()` | die nächste Zeile beginnt eine neue Seite (Seitenansicht, z. B. bei Raumbeginn) |
 
 Die mitgelieferten Plugins in [`plugins/`](plugins) sind vollständige Beispiele:
 [`karte`](plugins/karte/main.lua) schreibt Zeilen um und füllt ein Fenster,

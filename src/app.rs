@@ -66,6 +66,9 @@ struct View {
     tim: EditorState,
     vars: VarState,
     button_sel: Option<usize>,
+    /// Ausgabe folgt neuen Zeilen/Seiten (false, solange der Benutzer hochgescrollt hat)
+    follow: bool,
+    seen_page_version: u64,
 }
 
 impl View {
@@ -81,6 +84,8 @@ impl View {
             tim: EditorState::default(),
             vars: VarState::default(),
             button_sel: None,
+            follow: true,
+            seen_page_version: 0,
         }
     }
 }
@@ -1014,34 +1019,68 @@ impl MudApp {
             let rows = (avail.y / row_h.max(1.0)).floor().clamp(5.0, 300.0) as u16;
             v.session.set_term_size(cols, rows);
 
+            // Seitenansicht: ab Seitenbeginn (z. B. neuer Raum) steht die Ausgabe oben im Fenster,
+            // der Verlauf liegt darüber und erscheint beim Hochscrollen.
+            if v.session.page_version != v.seen_page_version {
+                v.seen_page_version = v.session.page_version;
+                v.follow = true;
+            }
             let s = &v.session;
             let has_current = !s.current.is_empty();
-            let total = s.lines.len() + usize::from(has_current);
+            let n = s.lines.len() + usize::from(has_current);
+            let anchor = s.page_start_index();
+            let vis_rows = (avail.y / row_h.max(1.0)).ceil() as usize + 1;
+            // Leerzeilen unten, damit der Seitenbeginn ganz nach oben gescrollt werden kann
+            let total = match anchor {
+                Some(a) => n.max(a + vis_rows),
+                None => n,
+            };
+            let bottom = (n as f32 * row_h - avail.y).max(0.0);
+            let target = match anchor {
+                Some(a) => (a as f32 * row_h).max(bottom),
+                None => bottom,
+            };
             ui.spacing_mut().item_spacing.y = 0.0;
-            ScrollArea::both()
+            let mut area = ScrollArea::both()
                 .id_salt(("output", self.active))
-                .auto_shrink([false, false])
-                .stick_to_bottom(true)
-                .show_rows(ui, row_h, total, |ui, range| {
-                    for i in range {
-                        let line = if i < s.lines.len() { &s.lines[i] } else { &s.current };
-                        let mut job = LayoutJob::default();
-                        job.wrap.max_width = f32::INFINITY;
-                        if line.spans.is_empty() {
-                            job.append(
-                                " ",
-                                0.0,
-                                TextFormat {
-                                    font_id: font.clone(),
-                                    ..Default::default()
-                                },
-                            );
-                        } else {
-                            line_job(line, &font, &mut job);
-                        }
-                        ui.add(egui::Label::new(job).extend());
+                .auto_shrink([false, false]);
+            if v.follow {
+                area = area.vertical_scroll_offset(target);
+            }
+            let out = area.show_rows(ui, row_h, total, |ui, range| {
+                for i in range {
+                    let mut job = LayoutJob::default();
+                    job.wrap.max_width = f32::INFINITY;
+                    let line = if i < s.lines.len() {
+                        Some(&s.lines[i])
+                    } else if i < n {
+                        Some(&s.current)
+                    } else {
+                        None
+                    };
+                    match line {
+                        Some(l) if !l.spans.is_empty() => line_job(l, &font, &mut job),
+                        _ => job.append(
+                            " ",
+                            0.0,
+                            TextFormat {
+                                font_id: font.clone(),
+                                ..Default::default()
+                            },
+                        ),
                     }
-                });
+                    ui.add(egui::Label::new(job).extend());
+                }
+            });
+            // Hat der Benutzer gescrollt? Dann nicht mehr mitspringen, bis er wieder unten/an der Seite ist.
+            let actual = out.state.offset.y;
+            if v.follow {
+                if (actual - target).abs() > row_h * 0.5 {
+                    v.follow = false;
+                }
+            } else if actual >= target - row_h * 0.5 {
+                v.follow = true;
+            }
         });
     }
 
@@ -1382,6 +1421,7 @@ impl eframe::App for MudApp {
                     }
                     v.hist_pos = None;
                     v.session.user_input(&text);
+                    v.follow = true;
                     v.focus_input = true;
                 }
                 if v.focus_input {

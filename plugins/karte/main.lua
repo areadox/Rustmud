@@ -78,6 +78,8 @@ function OnPluginLineReceived(plain, ansi)
     if not w then return true end
     breite = w
     zeilen, original = { AnsiSub(ansi, 1, w) }, {}
+    -- neuer Raum: Seitenansicht beginnt hier
+    SetPageStart()
     return merken(ansi, resttext(ansi, w))
   end
 
