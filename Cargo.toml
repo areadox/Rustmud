@@ -1,6 +1,6 @@
 [package]
 name = "rustmud"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "MUD-Client in Rust nach dem Vorbild von MUSHclient – Telnet, MCCP, GMCP, MSDP, Trigger, Aliase, Timer und Lua-Scripting"
 license = "MIT"
