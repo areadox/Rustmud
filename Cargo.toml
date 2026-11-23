@@ -13,8 +13,8 @@ categories = ["games", "network-programming", "gui"]
 exclude = [".github/", "target/", "installer/"]
 
 [dependencies]
-eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
-egui = "0.31"
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+egui = "0.37"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 regex = "1"
 flate2 = "1"
